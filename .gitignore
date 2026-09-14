@@ -1,0 +1,23 @@
+# Maven output and JVM diagnostics
+target/
+*.class
+*.log
+hs_err_pid*
+replay_pid*
+
+# Local editor metadata and code indexes
+.DS_Store
+/.codegraph/
+/.cursor/
+/.classpath
+/.project
+/.factorypath
+/.idea/
+*.iml
+/.settings/*
+!/.settings/org.eclipse.jdt.core.prefs
+
+# Local environment configuration
+.env
+.env.*
+!.env.example
