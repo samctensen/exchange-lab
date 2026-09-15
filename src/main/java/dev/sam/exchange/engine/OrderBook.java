@@ -1,6 +1,7 @@
 package dev.sam.exchange.engine;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -80,5 +81,9 @@ public class OrderBook {
     if (restingOrder.remainingLots() == 0L) {
       this.ordersById.remove(orderId);
     }
+  }
+
+  public List<OrderSnapshot> snapshot() {
+    return ordersById.values().stream().map(order -> new OrderSnapshot(order.order(), order.remainingLots())).toList();
   }
 }
