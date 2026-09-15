@@ -1,5 +1,7 @@
 package dev.sam.exchange.engine;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 public class MatchingEngine {
@@ -10,13 +12,25 @@ public class MatchingEngine {
     this.orderBook = orderBook;
   }
 
-  public Optional<Trade> matchOnce(long incomingOrderId) {
-    Optional<PlaceOrder> incomingOrderOptional = this.orderBook.find(incomingOrderId);
-    if (incomingOrderOptional.isEmpty()) {
-      throw new IllegalArgumentException("Incoming order ID does not exist: " + incomingOrderId);
+  public List<Trade> match(long incomingOrderId) {
+    List<Trade> matches = new ArrayList<Trade>();
+    Optional<Trade> match = matchOnce(incomingOrderId);
+
+    while (match.isPresent()) {
+      matches.add(match.get());
+
+      if (this.orderBook.find(incomingOrderId).isPresent()) {
+        match = matchOnce(incomingOrderId);
+      } else {
+        match = Optional.empty();
+      }
     }
 
-    PlaceOrder incomingOrder = incomingOrderOptional.get();
+    return matches;
+  }
+
+  public Optional<Trade> matchOnce(long incomingOrderId) {
+    PlaceOrder incomingOrder = findIncomingOrderOrThrow(incomingOrderId);
 
     if (incomingOrder.side() == Side.BID) {
       Optional<PlaceOrder> restingBestAsk = this.orderBook.bestAsk();
@@ -33,6 +47,15 @@ public class MatchingEngine {
       return Optional
           .of(createTrade(incomingOrder.orderId(), restingBestBid.get().orderId(), restingBestBid.get().priceTicks()));
     }
+  }
+
+  private PlaceOrder findIncomingOrderOrThrow(long incomingOrderId) {
+    Optional<PlaceOrder> incomingOrderOptional = this.orderBook.find(incomingOrderId);
+    if (incomingOrderOptional.isEmpty()) {
+      throw new IllegalArgumentException("Incoming order ID does not exist: " + incomingOrderId);
+    }
+
+    return incomingOrderOptional.get();
   }
 
   private Trade createTrade(long incomingOrderId, long restingOrderId, long restingPriceTicks) {
