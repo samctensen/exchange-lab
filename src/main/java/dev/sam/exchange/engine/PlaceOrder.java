@@ -1,6 +1,6 @@
 package dev.sam.exchange.engine;
 
-public record PlaceOrder(long orderId, Side side, long priceTicks, long quantityLots) {
+public record PlaceOrder(long orderId, Side side, long priceTicks, long quantityLots) implements EngineCommand {
   public PlaceOrder {
     if (quantityLots <= 0) {
       throw new IllegalArgumentException("quantityLots must be positive");

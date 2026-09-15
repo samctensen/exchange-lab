@@ -12,6 +12,27 @@ public class MatchingEngine {
     this.orderBook = orderBook;
   }
 
+  public CommandResult process(EngineCommand command) {
+    return switch (command) {
+      case CancelOrder cancel -> {
+        Optional<PlaceOrder> cancelled = this.orderBook.cancel(cancel.orderId());
+        CancelResult result = new CancelResult(cancel.orderId(), cancelled.isPresent());
+        yield result;
+      }
+      case PlaceOrder order -> {
+        List<Trade> trades = this.submit(order);
+        long remainingLots = this.orderBook.remainingLots(order.orderId()).orElse(0L);
+        PlaceResult result = new PlaceResult(order.orderId(), trades, remainingLots);
+        yield result;
+      }
+    };
+  }
+
+  public List<Trade> submit(PlaceOrder order) {
+    this.orderBook.add(order);
+    return this.match(order.orderId());
+  }
+
   public List<Trade> match(long incomingOrderId) {
     List<Trade> matches = new ArrayList<Trade>();
     Optional<Trade> match = matchOnce(incomingOrderId);
