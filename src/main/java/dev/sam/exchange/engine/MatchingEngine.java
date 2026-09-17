@@ -90,4 +90,17 @@ public class MatchingEngine {
     Trade trade = new Trade(incomingOrderId, restingOrderId, restingPriceTicks, quantityLots);
     return trade;
   }
+
+  public void validate(EngineCommand command) {
+    switch (command) {
+      case PlaceOrder order -> {
+        if (this.orderBook.find(order.orderId()).isPresent()) {
+          throw new IllegalArgumentException("Order ID already exists: " + order.orderId());
+        }
+      }
+      case CancelOrder cancel -> {
+        // Cancelling an unknown order is allowed.
+      }
+    }
+  }
 }
