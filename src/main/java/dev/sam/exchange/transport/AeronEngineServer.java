@@ -102,6 +102,16 @@ public class AeronEngineServer {
 
         System.out.println("Result: " + result);
       }
+
+      // This demo client closes its reply subscription after receiving both results.
+      // Keep the driver alive until then, so shutdown cannot interrupt the final reply.
+      long shutdownDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while (replies.isConnected()) {
+        if (System.nanoTime() - shutdownDeadline >= 0) {
+          throw new IllegalStateException("Timed out waiting for the reply client to disconnect");
+        }
+        idle.idle();
+      }
     }
   }
 }
