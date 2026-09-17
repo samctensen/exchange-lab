@@ -1,10 +1,15 @@
 {
+  "terminal": {
+    "env": {
+      "JAVA_TOOL_OPTIONS": "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED",
+    },
+  },
   "auto_signature_help": true,
   "diagnostics": {
     "inline": {
       "enabled": true,
-      "max_severity": "warning"
-    }
+      "max_severity": "warning",
+    },
   },
   "languages": {
     "Java": {
@@ -13,8 +18,8 @@
       "tab_size": 2,
       "hard_tabs": false,
       "code_actions_on_format": {
-        "source.organizeImports": true
-      }
-    }
-  }
+        "source.organizeImports": true,
+      },
+    },
+  },
 }
