@@ -1,6 +1,9 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<?xml version="1.0" encoding="UTF-8" ?>
+<project
+  xmlns="http://maven.apache.org/POM/4.0.0"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd"
+>
   <modelVersion>4.0.0</modelVersion>
 
   <groupId>dev.sam</groupId>
@@ -8,7 +11,8 @@
   <version>1.0-SNAPSHOT</version>
 
   <name>exchange-lab</name>
-  <description>A personal exploration of Java backend programming and high-frequency trading architecture.</description>
+  <description
+  >A personal exploration of Java backend programming and high-frequency trading architecture.</description>
   <url>https://github.com/samctensen/exchange-lab</url>
 
   <properties>
@@ -40,6 +44,11 @@
       <artifactId>junit-jupiter-params</artifactId>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <groupId>io.aeron</groupId>
+      <artifactId>aeron-driver</artifactId>
+      <version>1.53.0</version>
+    </dependency>
   </dependencies>
 
   <build>
@@ -53,10 +62,11 @@
           <java>
             <eclipse>
               <version>4.40</version>
-              <file>${project.basedir}/.settings/org.eclipse.jdt.core.prefs</file>
+              <file
+              >${project.basedir}/.settings/org.eclipse.jdt.core.prefs</file>
             </eclipse>
-            <trimTrailingWhitespace/>
-            <endWithNewline/>
+            <trimTrailingWhitespace />
+            <endWithNewline />
           </java>
         </configuration>
         <executions>
@@ -70,7 +80,8 @@
         </executions>
       </plugin>
     </plugins>
-    <pluginManagement><!-- lock down plugins versions to avoid using Maven defaults (may be moved to parent pom) -->
+    <pluginManagement
+    ><!-- lock down plugins versions to avoid using Maven defaults (may be moved to parent pom) -->
       <plugins>
         <!-- clean lifecycle, see https://maven.apache.org/ref/current/maven-core/lifecycles.html#clean_Lifecycle -->
         <plugin>
@@ -95,6 +106,9 @@
         <plugin>
           <artifactId>maven-surefire-plugin</artifactId>
           <version>3.3.0</version>
+          <configuration>
+            <argLine>--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED</argLine>
+          </configuration>
         </plugin>
         <plugin>
           <artifactId>maven-jar-plugin</artifactId>
