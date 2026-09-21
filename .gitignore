@@ -21,3 +21,6 @@ replay_pid*
 .env
 .env.*
 !.env.example
+
+# Local command journals
+/data/

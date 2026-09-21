@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.SleepingIdleStrategy;
@@ -24,8 +25,34 @@ import io.aeron.logbuffer.FragmentHandler;
 
 public class AeronEngineServer {
   public static void main(String[] args) throws IOException {
-    // Both commands share one engine and a fresh journal for this demo run.
-    Path journalPath = Files.createTempFile("exchange-aeron-", ".journal");
+
+    AtomicBoolean shutdownRequested = new AtomicBoolean(false);
+    Thread serverThread = Thread.currentThread();
+    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+      // Ask the main thread to leave its processing loop.
+      shutdownRequested.set(true);
+
+      try {
+        // Give it time to finish and close the try-with-resources block.
+        serverThread.join(10_000);
+
+        if (serverThread.isAlive()) {
+          System.err.println("Server shutdown exceeded 10 seconds");
+        }
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+    }, "server-shutdown"));
+
+    // Recover the existing journal before accepting new commands.
+    Path journalPath = args.length > 0 ? Path.of(args[0]) : Path.of("data", "commands.journal");
+    Path parent = journalPath.getParent();
+    if (parent != null) {
+      Files.createDirectories(parent);
+    }
+    if (Files.notExists(journalPath)) {
+      Files.createFile(journalPath);
+    }
     JournaledEngine journaledEngine = JournaledEngine.recover(journalPath);
 
     // Both processes use this directory to connect to the same media driver.
@@ -55,24 +82,20 @@ public class AeronEngineServer {
 
       System.out.println("Server ready: " + aeronDirectory);
       System.out.println("Journal: " + journalPath);
-      System.out.println("Waiting for two commands; each has a 60-second receive timeout.");
+      System.out.println("Waiting for commands.");
 
       // Stream 1 receives commands; stream 2 publishes their results.
       CommandResultCodec resultCodec = new CommandResultCodec();
       UnsafeBuffer buffer = new UnsafeBuffer(ByteBuffer.allocateDirect(256));
 
-      // This demo handles two commands, then exits.
-      for (int processed = 0; processed < 2; processed++) {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+      // Process commands until the shutdown hook asks this thread to stop.
+      while (!shutdownRequested.get()) {
+        int fragments = subscription.poll(handler, 1);
 
-        // Poll one fragment at a time; idle when no command is available.
-        while (subscription.poll(handler, 1) == 0) {
-          if (System.nanoTime() - deadline >= 0) {
-            throw new IllegalStateException("Timed out waiting for command " + (processed + 1));
-          }
+        if (fragments == 0) {
           idle.idle();
+          continue;
         }
-
         // Process once, outside the callback so journal IOExceptions can propagate.
         EngineCommand command = receivedCommands.removeFirst();
         CommandResult result = journaledEngine.process(command);
@@ -80,7 +103,7 @@ public class AeronEngineServer {
         String resultEncoding = resultCodec.encode(result);
         // Send exactly the bytes written, including the string-length prefix.
         int resultMessageLength = buffer.putStringAscii(0, resultEncoding);
-        deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        long offerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         long offerResult;
 
         // Retry sending the same result without processing the command again.
@@ -93,7 +116,7 @@ public class AeronEngineServer {
           if (offerResult == Publication.MAX_POSITION_EXCEEDED) {
             throw new IllegalStateException("Publication reached its maximum position");
           }
-          if (System.nanoTime() - deadline >= 0) {
+          if (System.nanoTime() - offerDeadline >= 0) {
             throw new IllegalStateException("Timed out sending reply; last offer result: " + offerResult);
           }
 
@@ -101,16 +124,6 @@ public class AeronEngineServer {
         }
 
         System.out.println("Result: " + result);
-      }
-
-      // This demo client closes its reply subscription after receiving both results.
-      // Keep the driver alive until then, so shutdown cannot interrupt the final reply.
-      long shutdownDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-      while (replies.isConnected()) {
-        if (System.nanoTime() - shutdownDeadline >= 0) {
-          throw new IllegalStateException("Timed out waiting for the reply client to disconnect");
-        }
-        idle.idle();
       }
     }
   }
