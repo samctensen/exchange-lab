@@ -3,11 +3,13 @@ package dev.sam.exchange;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 
 import dev.sam.exchange.engine.CommandResult;
 import dev.sam.exchange.engine.EngineCommand;
 import dev.sam.exchange.engine.MatchingEngine;
 import dev.sam.exchange.engine.OrderBook;
+import dev.sam.exchange.engine.RejectResult;
 import dev.sam.exchange.persistence.CommandJournal;
 
 public class JournaledEngine {
@@ -21,7 +23,11 @@ public class JournaledEngine {
   }
 
   public CommandResult process(EngineCommand command) throws IOException {
-    this.engine.validate(command);
+    Optional<RejectResult> rejection = this.engine.validate(command);
+    if (rejection.isPresent()) {
+      return rejection.get();
+    }
+
     this.journal.append(command);
     return this.engine.process(command);
   }
