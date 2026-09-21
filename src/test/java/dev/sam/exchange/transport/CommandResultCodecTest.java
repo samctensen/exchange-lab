@@ -39,6 +39,7 @@ class CommandResultCodecTest {
     return Stream.of(Arguments.of(new CancelResult(1L, true), "CANCEL_RESULT,1,true"),
         Arguments.of(new CancelResult(2L, false), "CANCEL_RESULT,2,false"),
         Arguments.of(new RejectResult(1L, RejectReason.DUPLICATE_ORDER_ID), "REJECT_RESULT,1,DUPLICATE_ORDER_ID"),
+        Arguments.of(new RejectResult(42L, RejectReason.REQUEST_ID_CONFLICT), "REJECT_RESULT,42,REQUEST_ID_CONFLICT"),
         Arguments.of(new PlaceResult(1L, List.of(), 10L), "PLACE_RESULT,1,10,0"),
         Arguments.of(new PlaceResult(2L, List.of(new Trade(2L, 1L, 100L, 4L)), 0L), "PLACE_RESULT,2,0,1,2,1,100,4"),
         Arguments.of(new PlaceResult(3L, List.of(new Trade(3L, 1L, 101L, 4L), new Trade(3L, 2L, 100L, 5L)), 2L),

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -28,6 +29,7 @@ import dev.sam.exchange.engine.RejectReason;
 import dev.sam.exchange.engine.RejectResult;
 import dev.sam.exchange.engine.Side;
 import dev.sam.exchange.engine.Trade;
+import dev.sam.exchange.persistence.RequestJournal;
 import io.aeron.Aeron;
 import io.aeron.FragmentAssembler;
 import io.aeron.Publication;
@@ -38,15 +40,55 @@ class AeronEngineServerTest {
 
   @Test
   @Timeout(30)
+  void rejectsRequestIdConflictAndKeepsServingRequests(@TempDir Path tempDir) throws Exception {
+    Path journalPath = tempDir.resolve("requests.journal");
+    UUID originalId = new UUID(0L, 1L);
+    CommandRequest original = new CommandRequest(originalId, new PlaceOrder(1L, Side.ASK, 100L, 5L));
+    CommandRequest conflict = new CommandRequest(originalId, new PlaceOrder(99L, Side.BID, 100L, 2L));
+    CommandRequest next = new CommandRequest(new UUID(0L, 2L), new PlaceOrder(2L, Side.BID, 100L, 2L));
+    CommandRequest finalFill = new CommandRequest(new UUID(0L, 3L), new PlaceOrder(3L, Side.BID, 100L, 3L));
+
+    // The conflicting bid must neither trade nor replace the original ask's cached response.
+    List<List<CommandResult>> results = runServerWithRequests(tempDir, journalPath,
+        List.of(List.of(original, conflict, original, next, finalFill)), false, false);
+
+    assertEquals(List.of(new PlaceResult(1L, List.of(), 5L), new RejectResult(99L, RejectReason.REQUEST_ID_CONFLICT),
+        new PlaceResult(1L, List.of(), 5L), new PlaceResult(2L, List.of(new Trade(2L, 1L, 100L, 2L)), 0L),
+        new PlaceResult(3L, List.of(new Trade(3L, 1L, 100L, 3L)), 0L)), results.getFirst());
+    assertEquals(List.of(original, next, finalFill), new RequestJournal(journalPath).readAll());
+  }
+
+  @Test
+  @Timeout(30)
+  void retryAfterClientReconnectDoesNotMatchTheFilledOrderAgain(@TempDir Path tempDir) throws Exception {
+    Path journalPath = tempDir.resolve("requests.journal");
+    CommandRequest ask = new CommandRequest(new UUID(0L, 1L), new PlaceOrder(1L, Side.ASK, 100L, 5L));
+    CommandRequest bid = new CommandRequest(new UUID(0L, 2L), new PlaceOrder(2L, Side.BID, 100L, 2L));
+    CommandRequest finalFill = new CommandRequest(new UUID(0L, 3L), new PlaceOrder(3L, Side.BID, 100L, 3L));
+
+    // A new client retries the already-filled bid using the same UUID, then consumes the remaining three lots.
+    List<List<CommandResult>> results = runServerWithRequests(tempDir, journalPath,
+        List.of(List.of(ask, bid), List.of(bid, finalFill)), false, false);
+
+    PlaceResult originalFill = new PlaceResult(2L, List.of(new Trade(2L, 1L, 100L, 2L)), 0L);
+    assertEquals(List.of(new PlaceResult(1L, List.of(), 5L), originalFill), results.get(0));
+    assertEquals(List.of(originalFill, new PlaceResult(3L, List.of(new Trade(3L, 1L, 100L, 3L)), 0L)), results.get(1));
+    assertEquals(List.of(ask, bid, finalFill), new RequestJournal(journalPath).readAll());
+  }
+
+  @Test
+  @Timeout(30)
   void returnsEveryTradeWhenReplyExceedsTheOriginalBufferAndFragmentSize(@TempDir Path tempDir) throws Exception {
-    Path journalPath = tempDir.resolve("commands.journal");
-    StringBuilder initialJournal = new StringBuilder();
+    Path journalPath = tempDir.resolve("requests.journal");
+    List<EngineCommand> initialOrders = new ArrayList<>();
+    RequestJournal journal = new RequestJournal(journalPath);
     List<Trade> expectedTrades = new ArrayList<>();
     for (long orderId = 1; orderId <= 100; orderId++) {
-      initialJournal.append("PLACE,").append(orderId).append(",ASK,100,1\n");
+      PlaceOrder ask = new PlaceOrder(orderId, Side.ASK, 100L, 1L);
+      initialOrders.add(ask);
+      journal.append(new CommandRequest(new UUID(0L, orderId), ask));
       expectedTrades.add(new Trade(1000L, orderId, 100L, 1L));
     }
-    Files.writeString(journalPath, initialJournal);
 
     PlaceResult expected = new PlaceResult(1000L, expectedTrades, 0L);
     String encoded = new CommandResponseCodec().encode(new CommandResponse(UUID.randomUUID(), expected));
@@ -58,61 +100,69 @@ class AeronEngineServerTest {
         List.of(new PlaceOrder(1000L, Side.BID, 100L, 100L), new CancelOrder(100L)), false);
 
     assertEquals(List.of(expected, new CancelResult(100L, false)), results);
-    assertEquals(initialJournal + "PLACE,1000,BID,100,100\nCANCEL,100\n", Files.readString(journalPath));
+    List<EngineCommand> expectedCommands = new ArrayList<>(initialOrders);
+    expectedCommands.add(new PlaceOrder(1000L, Side.BID, 100L, 100L));
+    expectedCommands.add(new CancelOrder(100L));
+    assertEquals(expectedCommands, journalCommands(journalPath));
   }
 
   @Test
   @Timeout(30)
   void waitsForCompleteFragmentedRequestBeforeProcessingIt(@TempDir Path tempDir) throws Exception {
-    Path journalPath = tempDir.resolve("commands.journal");
+    Path journalPath = tempDir.resolve("requests.journal");
     List<List<CommandResult>> results = runServerWithClients(tempDir, journalPath,
         List.of(List.of(new PlaceOrder(1L, Side.BID, 100L, 10L))), false, true);
 
     assertEquals(List.of(List.of(new PlaceResult(1L, List.of(), 10L))), results);
-    assertEquals("PLACE,1,BID,100,10\n", Files.readString(journalPath), "Process and journal the request exactly once");
+    assertEquals(List.of(new PlaceOrder(1L, Side.BID, 100L, 10L)), journalCommands(journalPath),
+        "Process and journal the request exactly once");
   }
 
   @Test
   @Timeout(30)
   void keepsDriverAliveWhileClientDelaysReply(@TempDir Path tempDir) throws Exception {
-    Path journalPath = tempDir.resolve("commands.journal");
+    Path journalPath = tempDir.resolve("requests.journal");
     List<CommandResult> results = runServerSession(tempDir, journalPath,
         List.of(new PlaceOrder(1L, Side.BID, 100L, 10L), new PlaceOrder(2L, Side.ASK, 99L, 4L)), true);
 
     assertEquals(
         List.of(new PlaceResult(1L, List.of(), 10L), new PlaceResult(2L, List.of(new Trade(2L, 1L, 100L, 4L)), 0L)),
         results);
-    assertEquals("PLACE,1,BID,100,10\nPLACE,2,ASK,99,4\n", Files.readString(journalPath));
+    assertEquals(List.of(new PlaceOrder(1L, Side.BID, 100L, 10L), new PlaceOrder(2L, Side.ASK, 99L, 4L)),
+        journalCommands(journalPath));
   }
 
   @Test
   @Timeout(30)
-  void recoversRemainingOrdersAfterServerRestart(@TempDir Path tempDir) throws Exception {
-    Path journalPath = tempDir.resolve("journal/commands.journal");
+  void recoversRemainingOrdersAndCachedRepliesAfterServerRestart(@TempDir Path tempDir) throws Exception {
+    Path journalPath = tempDir.resolve("journal/requests.journal");
+    CommandRequest bid = new CommandRequest(new UUID(0L, 1L), new PlaceOrder(1L, Side.BID, 100L, 10L));
+    CommandRequest ask = new CommandRequest(new UUID(0L, 2L), new PlaceOrder(2L, Side.ASK, 99L, 4L));
+    CommandRequest finalFill = new CommandRequest(new UUID(0L, 3L), new PlaceOrder(3L, Side.ASK, 100L, 6L));
+    CommandRequest cancel = new CommandRequest(new UUID(0L, 4L), new CancelOrder(1L));
+    PlaceResult originalFill = new PlaceResult(2L, List.of(new Trade(2L, 1L, 100L, 4L)), 0L);
 
     // The first server run leaves six lots resting on bid 1.
-    List<CommandResult> firstResults = runServerSession(tempDir.resolve("first-run"), journalPath,
-        List.of(new PlaceOrder(1L, Side.BID, 100L, 10L), new PlaceOrder(2L, Side.ASK, 99L, 4L)), false);
-    assertEquals(
-        List.of(new PlaceResult(1L, List.of(), 10L), new PlaceResult(2L, List.of(new Trade(2L, 1L, 100L, 4L)), 0L)),
-        firstResults);
-    assertEquals("PLACE,1,BID,100,10\nPLACE,2,ASK,99,4\n", Files.readString(journalPath));
+    List<List<CommandResult>> firstResults = runServerWithRequests(tempDir.resolve("first-run"), journalPath,
+        List.of(List.of(bid, ask)), false, false);
+    assertEquals(List.of(List.of(new PlaceResult(1L, List.of(), 10L), originalFill)), firstResults);
+    assertEquals(List.of(bid, ask), new RequestJournal(journalPath).readAll());
 
-    // A new server JVM must recover that bid from the same journal before processing ask 3.
-    List<CommandResult> secondResults = runServerSession(tempDir.resolve("second-run"), journalPath,
-        List.of(new PlaceOrder(3L, Side.ASK, 100L, 6L), new CancelOrder(1L)), false);
-    assertEquals(List.of(new PlaceResult(3L, List.of(new Trade(3L, 1L, 100L, 6L)), 0L), new CancelResult(1L, false)),
-        secondResults);
-
-    // Recovery must preserve the original commands and append only the two new ones.
-    assertEquals("PLACE,1,BID,100,10\nPLACE,2,ASK,99,4\nPLACE,3,ASK,100,6\nCANCEL,1\n", Files.readString(journalPath));
+    // A new JVM must remember the filled ask's reply before accepting a retry of that same UUID.
+    List<List<CommandResult>> secondResults = runServerWithRequests(tempDir.resolve("second-run"), journalPath,
+        List.of(List.of(ask, finalFill, cancel)), false, false);
+    assertEquals(List.of(List.of(originalFill, new PlaceResult(3L, List.of(new Trade(3L, 1L, 100L, 6L)), 0L),
+        new CancelResult(1L, false))), secondResults);
+    assertEquals(List.of(bid, ask, finalFill, cancel), new RequestJournal(journalPath).readAll(),
+        "Recovery and retries must not append; only the two new requests may extend the journal");
   }
 
   @Test
   @Timeout(30)
   void rejectsDuplicateOrderAndProcessesNextCommand(@TempDir Path tempDir) throws Exception {
-    Path journalPath = tempDir.resolve("commands.journal");
-    Files.writeString(journalPath, "PLACE,1,BID,100,10\n");
+    Path journalPath = tempDir.resolve("requests.journal");
+    new RequestJournal(journalPath)
+        .append(new CommandRequest(new UUID(0L, 1L), new PlaceOrder(1L, Side.BID, 100L, 10L)));
 
     // Recover bid 1, reject an attempt to change its price and size, then match a valid ask.
     List<CommandResult> results = runServerSession(tempDir, journalPath,
@@ -120,14 +170,15 @@ class AeronEngineServerTest {
     assertEquals(List.of(new RejectResult(1L, RejectReason.DUPLICATE_ORDER_ID),
         new PlaceResult(2L, List.of(new Trade(2L, 1L, 100L, 4L)), 0L)), results);
 
-    // Only the accepted ask is appended; the rejected duplicate must never enter the journal.
-    assertEquals("PLACE,1,BID,100,10\nPLACE,2,ASK,99,4\n", Files.readString(journalPath));
+    // Record the rejected request too, so its response can be reconstructed after restart.
+    assertEquals(List.of(new PlaceOrder(1L, Side.BID, 100L, 10L), new PlaceOrder(1L, Side.BID, 200L, 2L),
+        new PlaceOrder(2L, Side.ASK, 99L, 4L)), journalCommands(journalPath));
   }
 
   @Test
   @Timeout(30)
   void servesAnotherClientAfterFirstClientDisconnects(@TempDir Path tempDir) throws Exception {
-    Path journalPath = tempDir.resolve("commands.journal");
+    Path journalPath = tempDir.resolve("requests.journal");
 
     // Each inner list uses a new client connection, but both talk to the same server JVM.
     List<List<CommandResult>> results = runServerWithClients(tempDir, journalPath,
@@ -141,18 +192,23 @@ class AeronEngineServerTest {
     // The second client consumes the six lots left by the first; bid 1 is then gone.
     assertEquals(List.of(new PlaceResult(3L, List.of(new Trade(3L, 1L, 100L, 6L)), 0L), new CancelResult(1L, false)),
         results.get(1));
-    assertEquals("PLACE,1,BID,100,10\nPLACE,2,ASK,99,4\nPLACE,3,ASK,100,6\nCANCEL,1\n", Files.readString(journalPath));
+    assertEquals(List.of(new PlaceOrder(1L, Side.BID, 100L, 10L), new PlaceOrder(2L, Side.ASK, 99L, 4L),
+        new PlaceOrder(3L, Side.ASK, 100L, 6L), new CancelOrder(1L)), journalCommands(journalPath));
   }
 
   @Test
   @Timeout(30)
   void shutsDownCleanlyWhileIdle(@TempDir Path tempDir) throws Exception {
-    Path journalPath = tempDir.resolve("commands.journal");
+    Path journalPath = tempDir.resolve("requests.journal");
 
     // No client ever connects: the server must still notice the shutdown request and close its driver.
     runServerWithClients(tempDir, journalPath, List.of(), false);
 
     assertEquals("", Files.readString(journalPath));
+  }
+
+  private static List<EngineCommand> journalCommands(Path path) throws IOException {
+    return new RequestJournal(path).readAll().stream().map(CommandRequest::command).toList();
   }
 
   private static List<CommandResult> runServerSession(Path tempDir, Path journalPath, List<EngineCommand> orders,
@@ -167,6 +223,13 @@ class AeronEngineServerTest {
 
   private static List<List<CommandResult>> runServerWithClients(Path tempDir, Path journalPath,
       List<List<EngineCommand>> clientSessions, boolean delayFinalReply, boolean fragmentRequests) throws Exception {
+    List<List<CommandRequest>> requestSessions = clientSessions.stream()
+        .map(orders -> orders.stream().map(order -> new CommandRequest(UUID.randomUUID(), order)).toList()).toList();
+    return runServerWithRequests(tempDir, journalPath, requestSessions, delayFinalReply, fragmentRequests);
+  }
+
+  private static List<List<CommandResult>> runServerWithRequests(Path tempDir, Path journalPath,
+      List<List<CommandRequest>> clientSessions, boolean delayFinalReply, boolean fragmentRequests) throws Exception {
     Files.createDirectories(tempDir);
     Path serverLog = tempDir.resolve("server.log");
     Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
@@ -181,8 +244,8 @@ class AeronEngineServerTest {
       assertFalse(server.waitFor(250, TimeUnit.MILLISECONDS), "Server exited while waiting for a client");
 
       List<List<CommandResult>> results = new ArrayList<>();
-      for (List<EngineCommand> orders : clientSessions) {
-        results.add(exchangeCommands(server, serverLog, driverDirectory, orders, delayFinalReply, fragmentRequests));
+      for (List<CommandRequest> requests : clientSessions) {
+        results.add(exchangeRequests(server, serverLog, driverDirectory, requests, delayFinalReply, fragmentRequests));
         // The client's resources are closed, but the server must keep its book and driver alive.
         assertFalse(server.waitFor(250, TimeUnit.MILLISECONDS), "Server stopped after the client disconnected");
       }
@@ -205,8 +268,8 @@ class AeronEngineServerTest {
     }
   }
 
-  private static List<CommandResult> exchangeCommands(Process server, Path serverLog, Path driverDirectory,
-      List<EngineCommand> orders, boolean delayFinalReply, boolean fragmentRequests) throws Exception {
+  private static List<CommandResult> exchangeRequests(Process server, Path serverLog, Path driverDirectory,
+      List<CommandRequest> requests, boolean delayFinalReply, boolean fragmentRequests) throws Exception {
     List<CommandResult> received = new ArrayList<>();
     ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
     try (
@@ -222,8 +285,8 @@ class AeronEngineServerTest {
       FragmentAssembler assembler = new FragmentAssembler((replyBuffer, offset, length, header) -> responses
           .add(responseCodec.decode(replyBuffer.getStringAscii(offset))));
 
-      for (int i = 0; i < orders.size(); i++) {
-        CommandRequest request = new CommandRequest(UUID.randomUUID(), orders.get(i));
+      for (int i = 0; i < requests.size(); i++) {
+        CommandRequest request = requests.get(i);
         String encoded = requestCodec.encode(request);
         if (fragmentRequests) {
           // Leading zeroes keep a valid order ID while making the wire request span fragments.
@@ -241,7 +304,7 @@ class AeronEngineServerTest {
           idle.idle();
         }
 
-        if (delayFinalReply && i == orders.size() - 1) {
+        if (delayFinalReply && i == requests.size() - 1) {
           // Wait until the final reply is queued, then deliberately delay consuming it.
           awaitServerOutput(server, serverLog, "Result: PlaceResult[orderId=2,");
           assertFalse(server.waitFor(750, TimeUnit.MILLISECONDS),

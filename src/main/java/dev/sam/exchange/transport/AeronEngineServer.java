@@ -12,8 +12,6 @@ import org.agrona.ExpandableArrayBuffer;
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.SleepingIdleStrategy;
 
-import dev.sam.exchange.JournaledEngine;
-import dev.sam.exchange.engine.CommandResult;
 import io.aeron.Aeron;
 import io.aeron.FragmentAssembler;
 import io.aeron.Publication;
@@ -43,7 +41,7 @@ public class AeronEngineServer {
     }, "server-shutdown"));
 
     // Recover the existing journal before accepting new requests.
-    Path journalPath = args.length > 0 ? Path.of(args[0]) : Path.of("data", "commands.journal");
+    Path journalPath = args.length > 0 ? Path.of(args[0]) : Path.of("data", "requests.journal");
     Path parent = journalPath.getParent();
     if (parent != null) {
       Files.createDirectories(parent);
@@ -51,7 +49,7 @@ public class AeronEngineServer {
     if (Files.notExists(journalPath)) {
       Files.createFile(journalPath);
     }
-    JournaledEngine journaledEngine = JournaledEngine.recover(journalPath);
+    RequestProcessor requestProcessor = RequestProcessor.recover(journalPath);
 
     // Both processes use this directory to connect to the same media driver.
     String aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
@@ -98,9 +96,7 @@ public class AeronEngineServer {
         }
         // Process once, outside the callback so journal IOExceptions can propagate.
         CommandRequest request = receivedRequests.removeFirst();
-        CommandResult result = journaledEngine.process(request.command());
-
-        CommandResponse response = new CommandResponse(request.requestId(), result);
+        CommandResponse response = requestProcessor.process(request);
         String responseEncoding = responseCodec.encode(response);
         // Send exactly the bytes written, including the string-length prefix.
         int responseMessageLength = buffer.putStringAscii(0, responseEncoding);
@@ -124,7 +120,7 @@ public class AeronEngineServer {
           idle.idle();
         }
 
-        System.out.println("Result: " + result);
+        System.out.println("Result: " + response.result());
       }
     }
   }
