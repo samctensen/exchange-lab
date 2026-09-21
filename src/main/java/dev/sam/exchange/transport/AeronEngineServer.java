@@ -15,8 +15,6 @@ import org.agrona.concurrent.UnsafeBuffer;
 
 import dev.sam.exchange.JournaledEngine;
 import dev.sam.exchange.engine.CommandResult;
-import dev.sam.exchange.engine.EngineCommand;
-import dev.sam.exchange.persistence.CommandCodec;
 import io.aeron.Aeron;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -44,7 +42,7 @@ public class AeronEngineServer {
       }
     }, "server-shutdown"));
 
-    // Recover the existing journal before accepting new commands.
+    // Recover the existing journal before accepting new requests.
     Path journalPath = args.length > 0 ? Path.of(args[0]) : Path.of("data", "commands.journal");
     Path parent = journalPath.getParent();
     if (parent != null) {
@@ -67,28 +65,28 @@ public class AeronEngineServer {
         Publication replies = aeron.addPublication("aeron:ipc", 2)) {
 
       IdleStrategy idle = new SleepingIdleStrategy();
-      CommandCodec codec = new CommandCodec();
+      CommandRequestCodec requestCodec = new CommandRequestCodec();
 
-      // Hold received commands until the processing loop consumes them.
-      List<EngineCommand> receivedCommands = new ArrayList<>();
+      // Keep each command together with the request ID that must accompany its reply.
+      List<CommandRequest> receivedRequests = new ArrayList<>();
 
-      // poll() invokes this handler on the main thread. Each demo command fits in one fragment.
+      // poll() invokes this handler on the main thread. Each demo request fits in one fragment.
       // getStringAscii(offset) reads the string-length prefix followed by the text.
       FragmentHandler handler = (buffer, offset, length, header) -> {
         String encoded = buffer.getStringAscii(offset);
-        EngineCommand command = codec.decode(encoded);
-        receivedCommands.add(command);
+        CommandRequest request = requestCodec.decode(encoded);
+        receivedRequests.add(request);
       };
 
       System.out.println("Server ready: " + aeronDirectory);
       System.out.println("Journal: " + journalPath);
-      System.out.println("Waiting for commands.");
+      System.out.println("Waiting for requests.");
 
-      // Stream 1 receives commands; stream 2 publishes their results.
-      CommandResultCodec resultCodec = new CommandResultCodec();
+      // Stream 1 receives requests; stream 2 publishes correlated responses.
+      CommandResponseCodec responseCodec = new CommandResponseCodec();
       UnsafeBuffer buffer = new UnsafeBuffer(ByteBuffer.allocateDirect(256));
 
-      // Process commands until the shutdown hook asks this thread to stop.
+      // Process requests until the shutdown hook asks this thread to stop.
       while (!shutdownRequested.get()) {
         int fragments = subscription.poll(handler, 1);
 
@@ -97,18 +95,19 @@ public class AeronEngineServer {
           continue;
         }
         // Process once, outside the callback so journal IOExceptions can propagate.
-        EngineCommand command = receivedCommands.removeFirst();
-        CommandResult result = journaledEngine.process(command);
+        CommandRequest request = receivedRequests.removeFirst();
+        CommandResult result = journaledEngine.process(request.command());
 
-        String resultEncoding = resultCodec.encode(result);
+        CommandResponse response = new CommandResponse(request.requestId(), result);
+        String responseEncoding = responseCodec.encode(response);
         // Send exactly the bytes written, including the string-length prefix.
-        int resultMessageLength = buffer.putStringAscii(0, resultEncoding);
+        int responseMessageLength = buffer.putStringAscii(0, responseEncoding);
         long offerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         long offerResult;
 
         // Retry sending the same result without processing the command again.
         // A successful offer queues bytes; it does not confirm the client received them.
-        while ((offerResult = replies.offer(buffer, 0, resultMessageLength)) < 0) {
+        while ((offerResult = replies.offer(buffer, 0, responseMessageLength)) < 0) {
           // These failures cannot be resolved by retrying.
           if (offerResult == Publication.CLOSED) {
             throw new IllegalStateException("Publication is closed");
