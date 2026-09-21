@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 
@@ -28,7 +29,6 @@ import dev.sam.exchange.engine.RejectReason;
 import dev.sam.exchange.engine.RejectResult;
 import dev.sam.exchange.engine.Side;
 import dev.sam.exchange.engine.Trade;
-import dev.sam.exchange.persistence.CommandCodec;
 import io.aeron.Aeron;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -172,26 +172,21 @@ class AeronEngineServerTest {
             .connect(new Aeron.Context().aeronDirectoryName(driverDirectory.toString()).errorHandler(errors::add));
         Publication commands = aeron.addPublication("aeron:ipc", 1);
         Subscription replies = aeron.addSubscription("aeron:ipc", 2)) {
-      CommandCodec commandCodec = new CommandCodec();
-      CommandResultCodec resultCodec = new CommandResultCodec();
+      CommandRequestCodec requestCodec = new CommandRequestCodec();
+      CommandResponseCodec responseCodec = new CommandResponseCodec();
       SleepingIdleStrategy idle = new SleepingIdleStrategy();
       UnsafeBuffer buffer = new UnsafeBuffer(ByteBuffer.allocateDirect(256));
-      FragmentHandler handler = (replyBuffer, offset, length, header) -> received
-          .add(resultCodec.decode(replyBuffer.getStringAscii(offset)));
-
-      long connectionDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-      while (!replies.isConnected()) {
-        assertTrue(System.nanoTime() - connectionDeadline < 0, "Timed out connecting to the reply stream");
-        idle.idle();
-      }
-      // Replies use one shared stream. A reconnect can expose an earlier client's last reply.
-      // Discard only messages already present before this client sends its first command.
-      while (replies.poll((replyBuffer, offset, length, header) -> {
-      }, 10) > 0) {
-      }
 
       for (int i = 0; i < orders.size(); i++) {
-        int length = buffer.putStringAscii(0, commandCodec.encode(orders.get(i)));
+        CommandRequest request = new CommandRequest(UUID.randomUUID(), orders.get(i));
+        // Old replies may still be on the stream. Only this request's UUID can satisfy the wait.
+        FragmentHandler handler = (replyBuffer, offset, length, header) -> {
+          CommandResponse response = responseCodec.decode(replyBuffer.getStringAscii(offset));
+          if (request.requestId().equals(response.requestId())) {
+            received.add(response.result());
+          }
+        };
+        int length = buffer.putStringAscii(0, requestCodec.encode(request));
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (commands.offer(buffer, 0, length) < 0) {
           assertTrue(System.nanoTime() - deadline < 0, "Timed out sending test command");
@@ -208,6 +203,7 @@ class AeronEngineServerTest {
         deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (received.size() <= i) {
           replies.poll(handler, 1);
+          assertTrue(server.isAlive(), "Server exited before replying\n" + Files.readString(serverLog));
           assertTrue(errors.isEmpty(), errors::toString);
           assertTrue(System.nanoTime() - deadline < 0, "Timed out receiving test reply");
           idle.idle();

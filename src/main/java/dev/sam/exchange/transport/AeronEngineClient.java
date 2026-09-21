@@ -2,7 +2,9 @@ package dev.sam.exchange.transport;
 
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import org.agrona.concurrent.IdleStrategy;
@@ -13,7 +15,6 @@ import dev.sam.exchange.engine.CommandResult;
 import dev.sam.exchange.engine.EngineCommand;
 import dev.sam.exchange.engine.PlaceOrder;
 import dev.sam.exchange.engine.Side;
-import dev.sam.exchange.persistence.CommandCodec;
 import io.aeron.Aeron;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -28,32 +29,35 @@ public class AeronEngineClient {
     List<EngineCommand> orders = List.of(new PlaceOrder(1L, Side.BID, 100L, 10L),
         new PlaceOrder(2L, Side.ASK, 99L, 4L));
 
-    // Send commands on stream 1 and receive their results on stream 2.
+    // Send requests on stream 1 and receive correlated responses on stream 2.
     try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectory));
         Publication publication = aeron.addPublication("aeron:ipc", 1);
         Subscription replies = aeron.addSubscription("aeron:ipc", 2)) {
 
-      CommandCodec codec = new CommandCodec();
+      CommandRequestCodec requestCodec = new CommandRequestCodec();
       IdleStrategy idle = new SleepingIdleStrategy();
 
       // Reuse this buffer for the small commands in this demo.
       UnsafeBuffer buffer = new UnsafeBuffer(ByteBuffer.allocateDirect(256));
 
-      CommandResultCodec resultCodec = new CommandResultCodec();
-
-      // poll() invokes this handler on the main thread. Each demo reply fits in one fragment.
-      // Read the length-prefixed text from the offset supplied by Aeron.
-      FragmentHandler replyHandler = (replyBuffer, offset, length, header) -> {
-        String encoded = replyBuffer.getStringAscii(offset);
-        CommandResult command = resultCodec.decode(encoded);
-        System.out.println(command);
-      };
+      CommandResponseCodec responseCodec = new CommandResponseCodec();
 
       for (EngineCommand order : orders) {
-        String orderEncoding = codec.encode(order);
+        CommandRequest request = new CommandRequest(UUID.randomUUID(), order);
+        String requestEncoding = requestCodec.encode(request);
+
+        // poll() invokes the handler on this thread, so this list needs no synchronization.
+        // A reply for an older request or another client must not complete the current request.
+        List<CommandResult> matchingResults = new ArrayList<>(1);
+        FragmentHandler replyHandler = (replyBuffer, offset, length, header) -> {
+          CommandResponse response = responseCodec.decode(replyBuffer.getStringAscii(offset));
+          if (request.requestId().equals(response.requestId())) {
+            matchingResults.add(response.result());
+          }
+        };
 
         // Send exactly the bytes written, including the string-length prefix.
-        int messageLength = buffer.putStringAscii(0, orderEncoding);
+        int messageLength = buffer.putStringAscii(0, requestEncoding);
 
         // Sending and receiving each get their own five-second timeout.
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -76,15 +80,18 @@ public class AeronEngineClient {
           idle.idle();
         }
 
-        // Wait for this command's reply before sending the next command.
+        // Receiving a fragment is not enough: wait for the matching UUID.
+        // Unrelated replies do not reset this deadline.
         deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (replies.poll(replyHandler, 1) == 0) {
-          if (System.nanoTime() - deadline >= 0) {
-            throw new IllegalStateException("Timed out waiting for reply ");
+        while (matchingResults.isEmpty()) {
+          int fragments = replies.poll(replyHandler, 1);
+          if (matchingResults.isEmpty() && System.nanoTime() - deadline >= 0) {
+            throw new IllegalStateException("Timed out waiting for reply to request " + request.requestId());
           }
-          idle.idle();
+          idle.idle(fragments);
         }
 
+        System.out.println(matchingResults.getFirst());
         System.out.println("Successfully sent order; offer result: " + offerResult);
       }
     }
