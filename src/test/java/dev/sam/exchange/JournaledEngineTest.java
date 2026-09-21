@@ -19,6 +19,8 @@ import dev.sam.exchange.engine.OrderBook;
 import dev.sam.exchange.engine.OrderSnapshot;
 import dev.sam.exchange.engine.PlaceOrder;
 import dev.sam.exchange.engine.PlaceResult;
+import dev.sam.exchange.engine.RejectReason;
+import dev.sam.exchange.engine.RejectResult;
 import dev.sam.exchange.engine.Side;
 import dev.sam.exchange.engine.Trade;
 import dev.sam.exchange.persistence.CommandJournal;
@@ -54,7 +56,8 @@ class JournaledEngineTest {
     String journalBefore = Files.readString(path);
     List<OrderSnapshot> bookBefore = book.snapshot();
 
-    assertThrows(IllegalArgumentException.class, () -> engine.process(new PlaceOrder(1L, Side.BID, 100L, 2L)));
+    RejectResult duplicateIdReject = new RejectResult(1L, RejectReason.DUPLICATE_ORDER_ID);
+    assertEquals(duplicateIdReject, engine.process(new PlaceOrder(1L, Side.BID, 100L, 2L)));
 
     assertEquals(journalBefore, Files.readString(path));
     assertEquals(bookBefore, book.snapshot());

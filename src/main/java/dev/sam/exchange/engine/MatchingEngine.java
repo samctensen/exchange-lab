@@ -91,16 +91,15 @@ public class MatchingEngine {
     return trade;
   }
 
-  public void validate(EngineCommand command) {
-    switch (command) {
+  public Optional<RejectResult> validate(EngineCommand command) {
+    return switch (command) {
       case PlaceOrder order -> {
         if (this.orderBook.find(order.orderId()).isPresent()) {
-          throw new IllegalArgumentException("Order ID already exists: " + order.orderId());
+          yield Optional.of(new RejectResult(order.orderId(), RejectReason.DUPLICATE_ORDER_ID));
         }
+        yield Optional.empty();
       }
-      case CancelOrder cancel -> {
-        // Cancelling an unknown order is allowed.
-      }
-    }
+      case CancelOrder cancel -> Optional.empty();
+    };
   }
 }
