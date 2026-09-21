@@ -1,7 +1,6 @@
 package dev.sam.exchange.transport;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -9,13 +8,14 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.agrona.ExpandableArrayBuffer;
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.SleepingIdleStrategy;
-import org.agrona.concurrent.UnsafeBuffer;
 
 import dev.sam.exchange.JournaledEngine;
 import dev.sam.exchange.engine.CommandResult;
 import io.aeron.Aeron;
+import io.aeron.FragmentAssembler;
 import io.aeron.Publication;
 import io.aeron.Subscription;
 import io.aeron.driver.MediaDriver;
@@ -70,7 +70,7 @@ public class AeronEngineServer {
       // Keep each command together with the request ID that must accompany its reply.
       List<CommandRequest> receivedRequests = new ArrayList<>();
 
-      // poll() invokes this handler on the main thread. Each demo request fits in one fragment.
+      // The assembler invokes this handler on the main thread for each complete message.
       // getStringAscii(offset) reads the string-length prefix followed by the text.
       FragmentHandler handler = (buffer, offset, length, header) -> {
         String encoded = buffer.getStringAscii(offset);
@@ -78,20 +78,22 @@ public class AeronEngineServer {
         receivedRequests.add(request);
       };
 
+      FragmentAssembler assembler = new FragmentAssembler(handler);
+
       System.out.println("Server ready: " + aeronDirectory);
       System.out.println("Journal: " + journalPath);
       System.out.println("Waiting for requests.");
 
       // Stream 1 receives requests; stream 2 publishes correlated responses.
       CommandResponseCodec responseCodec = new CommandResponseCodec();
-      UnsafeBuffer buffer = new UnsafeBuffer(ByteBuffer.allocateDirect(256));
+      ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
 
       // Process requests until the shutdown hook asks this thread to stop.
       while (!shutdownRequested.get()) {
-        int fragments = subscription.poll(handler, 1);
+        int fragments = subscription.poll(assembler, 1);
+        idle.idle(fragments);
 
-        if (fragments == 0) {
-          idle.idle();
+        if (receivedRequests.isEmpty()) {
           continue;
         }
         // Process once, outside the callback so journal IOExceptions can propagate.

@@ -16,6 +16,7 @@ import dev.sam.exchange.engine.EngineCommand;
 import dev.sam.exchange.engine.PlaceOrder;
 import dev.sam.exchange.engine.Side;
 import io.aeron.Aeron;
+import io.aeron.FragmentAssembler;
 import io.aeron.Publication;
 import io.aeron.Subscription;
 import io.aeron.logbuffer.FragmentHandler;
@@ -41,6 +42,14 @@ public class AeronEngineClient {
       UnsafeBuffer buffer = new UnsafeBuffer(ByteBuffer.allocateDirect(256));
 
       CommandResponseCodec responseCodec = new CommandResponseCodec();
+      List<CommandResponse> receivedResponses = new ArrayList<>();
+
+      FragmentHandler replyHandler = (replyBuffer, offset, length, header) -> {
+        CommandResponse response = responseCodec.decode(replyBuffer.getStringAscii(offset));
+        receivedResponses.add(response);
+      };
+
+      FragmentAssembler replyAssembler = new FragmentAssembler(replyHandler);
 
       for (EngineCommand order : orders) {
         CommandRequest request = new CommandRequest(UUID.randomUUID(), order);
@@ -49,12 +58,6 @@ public class AeronEngineClient {
         // poll() invokes the handler on this thread, so this list needs no synchronization.
         // A reply for an older request or another client must not complete the current request.
         List<CommandResult> matchingResults = new ArrayList<>(1);
-        FragmentHandler replyHandler = (replyBuffer, offset, length, header) -> {
-          CommandResponse response = responseCodec.decode(replyBuffer.getStringAscii(offset));
-          if (request.requestId().equals(response.requestId())) {
-            matchingResults.add(response.result());
-          }
-        };
 
         // Send exactly the bytes written, including the string-length prefix.
         int messageLength = buffer.putStringAscii(0, requestEncoding);
@@ -83,11 +86,22 @@ public class AeronEngineClient {
         // Receiving a fragment is not enough: wait for the matching UUID.
         // Unrelated replies do not reset this deadline.
         deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+
         while (matchingResults.isEmpty()) {
-          int fragments = replies.poll(replyHandler, 1);
+          int fragments = replies.poll(replyAssembler, 1);
+
+          // Here, both the current request and complete responses are available.
+          for (CommandResponse response : receivedResponses) {
+            if (request.requestId().equals(response.requestId())) {
+              matchingResults.add(response.result());
+            }
+          }
+          receivedResponses.clear();
+
           if (matchingResults.isEmpty() && System.nanoTime() - deadline >= 0) {
             throw new IllegalStateException("Timed out waiting for reply to request " + request.requestId());
           }
+
           idle.idle(fragments);
         }
 

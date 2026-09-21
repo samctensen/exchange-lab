@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -14,11 +13,12 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 
+import org.agrona.ExpandableArrayBuffer;
 import org.agrona.concurrent.SleepingIdleStrategy;
-import org.agrona.concurrent.UnsafeBuffer;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import dev.sam.exchange.engine.CancelResult;
 import dev.sam.exchange.engine.PlaceOrder;
@@ -32,17 +32,20 @@ import io.aeron.driver.MediaDriver;
 import io.aeron.logbuffer.FragmentHandler;
 
 class AeronEngineClientTest {
-  @Test
+  @ParameterizedTest(name = "fragmented replies: {0}")
+  @ValueSource(booleans = {false, true})
   @Timeout(30)
-  void waitsForMatchingRequestIdAndIgnoresUnrelatedReplies(@TempDir Path tempDir) throws Exception {
+  void waitsForMatchingRequestIdAndIgnoresUnrelatedReplies(boolean fragmentedReplies, @TempDir Path tempDir)
+      throws Exception {
     Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
     Path clientLog = tempDir.resolve("client.log");
     ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
 
     // A real Aeron peer controls reply order while the actual demo client runs in another JVM.
     try (
-        MediaDriver driver = MediaDriver.launchEmbedded(new MediaDriver.Context()
-            .aeronDirectoryName(driverDirectory.toString()).dirDeleteOnShutdown(true).errorHandler(errors::add));
+        MediaDriver driver = MediaDriver
+            .launchEmbedded(new MediaDriver.Context().aeronDirectoryName(driverDirectory.toString()).ipcMtuLength(256)
+                .dirDeleteOnShutdown(true).errorHandler(errors::add));
         Aeron aeron = Aeron
             .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
         Subscription commands = aeron.addSubscription("aeron:ipc", 1);
@@ -62,19 +65,33 @@ class AeronEngineClientTest {
         CommandRequest first = requestCodec.decode(messages.getFirst());
         assertEquals(new PlaceOrder(1L, Side.BID, 100L, 10L), first.command());
 
+        // Ten one-lot fills with long resting IDs exceed this publication's single-fragment payload.
+        List<Trade> firstTrades = new ArrayList<>();
+        if (fragmentedReplies) {
+          for (int i = 0; i < 10; i++) {
+            firstTrades.add(new Trade(1L, Long.MAX_VALUE - i, 100L, 1L));
+          }
+        }
+        PlaceResult firstResult = new PlaceResult(1L, firstTrades, fragmentedReplies ? 0L : 10L);
+
         UUID unrelatedId = new UUID(first.requestId().getMostSignificantBits() ^ 1L,
             first.requestId().getLeastSignificantBits());
         sendResponse(replies, new CommandResponse(unrelatedId, new CancelResult(999L, false)));
+        if (fragmentedReplies) {
+          int length = sendResponse(replies, new CommandResponse(unrelatedId, firstResult));
+          assertTrue(length > replies.maxPayloadLength(), "The test must send a fragmented reply");
+          assertTrue(length <= replies.maxMessageLength(), "The fixture must fit within Aeron's message limit");
+        }
         assertStillWaiting(commands, handler, messages, 1, client, clientLog);
 
-        sendResponse(replies, new CommandResponse(first.requestId(), new PlaceResult(1L, List.of(), 10L)));
+        sendResponse(replies, new CommandResponse(first.requestId(), firstResult));
         awaitCommandCount(commands, handler, messages, 2, client, clientLog);
         CommandRequest second = requestCodec.decode(messages.get(1));
         assertEquals(new PlaceOrder(2L, Side.ASK, 99L, 4L), second.command());
         assertNotEquals(first.requestId(), second.requestId(), "Each command needs its own request ID");
 
         // Even a previously valid reply must not complete the next request.
-        sendResponse(replies, new CommandResponse(first.requestId(), new PlaceResult(1L, List.of(), 10L)));
+        sendResponse(replies, new CommandResponse(first.requestId(), firstResult));
         assertStillWaiting(commands, handler, messages, 2, client, clientLog);
         sendResponse(replies,
             new CommandResponse(second.requestId(), new PlaceResult(2L, List.of(new Trade(2L, 1L, 100L, 4L)), 0L)));
@@ -82,7 +99,7 @@ class AeronEngineClientTest {
         assertTrue(client.waitFor(5, TimeUnit.SECONDS), "Client did not finish after its matching replies");
         String output = Files.readString(clientLog);
         assertEquals(0, client.exitValue(), output);
-        assertEquals(List.of("PlaceResult[orderId=1, trades=[], remainingLots=10]",
+        assertEquals(List.of(firstResult.toString(),
             "PlaceResult[orderId=2, trades=[Trade[incomingOrderId=2, restingOrderId=1, priceTicks=100, quantityLots=4]], remainingLots=0]"),
             output.lines().filter(line -> line.startsWith("PlaceResult[")).toList());
         assertFalse(output.contains("CancelResult[orderId=999"), "Client printed an unrelated reply\n" + output);
@@ -121,8 +138,8 @@ class AeronEngineClientTest {
     }
   }
 
-  private static void sendResponse(Publication replies, CommandResponse response) {
-    UnsafeBuffer buffer = new UnsafeBuffer(ByteBuffer.allocateDirect(256));
+  private static int sendResponse(Publication replies, CommandResponse response) {
+    ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
     int length = buffer.putStringAscii(0, new CommandResponseCodec().encode(response));
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
     SleepingIdleStrategy idle = new SleepingIdleStrategy();
@@ -130,5 +147,6 @@ class AeronEngineClientTest {
       assertTrue(System.nanoTime() - deadline < 0, "Timed out sending test response");
       idle.idle();
     }
+    return length;
   }
 }
