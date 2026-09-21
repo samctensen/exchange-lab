@@ -65,7 +65,7 @@ The project configures it for Maven tests and Zed terminals. Include it in the l
 
 ### Tests and layout
 
-Integration tests launch real JVMs and use isolated temporary journals and Aeron directories. They cover restart recovery, client reconnection, rejection followed by a valid command, shutdown, and ignoring unrelated or stale replies.
+Integration tests launch real JVMs and use isolated temporary journals and Aeron directories. They cover restart recovery, client reconnection, rejection followed by a valid command, shutdown, fragmented requests and trade replies, and ignoring unrelated or stale replies.
 
 Code lives under `src/main/java/dev/sam/exchange`:
 
@@ -78,14 +78,14 @@ Tests mirror these packages under `src/test/java`. Zed and Spotless share Eclips
 
 ## Current demo limits
 
-- Client and server use fixed 256-byte buffers and assume each message fits in one fragment. Large trade results need buffer sizing and fragment assembly.
+- The client uses a 256-byte send buffer for the current small commands. The server grows its reply buffer, and both receivers reassemble fragmented messages. Messages must still fit within Aeron's maximum message length.
 - The client waits for one request at a time. Reply-send failures time out after five seconds and currently stop the server.
 - Journal writes are not explicitly forced to disk. Recovery tests cover normal restarts; an incomplete final journal line is rejected.
 - Request deduplication, performance measurements, and clustering are future work.
 
 ## What I want to explore next
 
-1. Handle larger messages and add request deduplication for retries.
+1. Add request deduplication for retries.
 2. Refine client sessions, reply delivery, and service lifecycle behavior.
 3. Measure throughput and tail latency, then study allocation, GC, data layout, and JVM behavior.
 4. Introduce Aeron Cluster, replicated execution, persisted snapshots, and failover.

@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -13,8 +12,8 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 
+import org.agrona.ExpandableArrayBuffer;
 import org.agrona.concurrent.SleepingIdleStrategy;
-import org.agrona.concurrent.UnsafeBuffer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -30,11 +29,49 @@ import dev.sam.exchange.engine.RejectResult;
 import dev.sam.exchange.engine.Side;
 import dev.sam.exchange.engine.Trade;
 import io.aeron.Aeron;
+import io.aeron.FragmentAssembler;
 import io.aeron.Publication;
 import io.aeron.Subscription;
-import io.aeron.logbuffer.FragmentHandler;
 
 class AeronEngineServerTest {
+  private static final int IPC_MTU_LENGTH = 1408;
+
+  @Test
+  @Timeout(30)
+  void returnsEveryTradeWhenReplyExceedsTheOriginalBufferAndFragmentSize(@TempDir Path tempDir) throws Exception {
+    Path journalPath = tempDir.resolve("commands.journal");
+    StringBuilder initialJournal = new StringBuilder();
+    List<Trade> expectedTrades = new ArrayList<>();
+    for (long orderId = 1; orderId <= 100; orderId++) {
+      initialJournal.append("PLACE,").append(orderId).append(",ASK,100,1\n");
+      expectedTrades.add(new Trade(1000L, orderId, 100L, 1L));
+    }
+    Files.writeString(journalPath, initialJournal);
+
+    PlaceResult expected = new PlaceResult(1000L, expectedTrades, 0L);
+    String encoded = new CommandResponseCodec().encode(new CommandResponse(UUID.randomUUID(), expected));
+    assertTrue(encoded.length() > 256, "The reply must exceed the old server buffer");
+    assertTrue(encoded.length() > IPC_MTU_LENGTH, "The reply must require multiple fragments");
+
+    // A single bid sweeps all 100 resting asks; the UUID-filtering test peer reassembles its reply.
+    List<CommandResult> results = runServerSession(tempDir, journalPath,
+        List.of(new PlaceOrder(1000L, Side.BID, 100L, 100L), new CancelOrder(100L)), false);
+
+    assertEquals(List.of(expected, new CancelResult(100L, false)), results);
+    assertEquals(initialJournal + "PLACE,1000,BID,100,100\nCANCEL,100\n", Files.readString(journalPath));
+  }
+
+  @Test
+  @Timeout(30)
+  void waitsForCompleteFragmentedRequestBeforeProcessingIt(@TempDir Path tempDir) throws Exception {
+    Path journalPath = tempDir.resolve("commands.journal");
+    List<List<CommandResult>> results = runServerWithClients(tempDir, journalPath,
+        List.of(List.of(new PlaceOrder(1L, Side.BID, 100L, 10L))), false, true);
+
+    assertEquals(List.of(List.of(new PlaceResult(1L, List.of(), 10L))), results);
+    assertEquals("PLACE,1,BID,100,10\n", Files.readString(journalPath), "Process and journal the request exactly once");
+  }
+
   @Test
   @Timeout(30)
   void keepsDriverAliveWhileClientDelaysReply(@TempDir Path tempDir) throws Exception {
@@ -125,14 +162,19 @@ class AeronEngineServerTest {
 
   private static List<List<CommandResult>> runServerWithClients(Path tempDir, Path journalPath,
       List<List<EngineCommand>> clientSessions, boolean delayFinalReply) throws Exception {
+    return runServerWithClients(tempDir, journalPath, clientSessions, delayFinalReply, false);
+  }
+
+  private static List<List<CommandResult>> runServerWithClients(Path tempDir, Path journalPath,
+      List<List<EngineCommand>> clientSessions, boolean delayFinalReply, boolean fragmentRequests) throws Exception {
     Files.createDirectories(tempDir);
     Path serverLog = tempDir.resolve("server.log");
     Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
     String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
     Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-        "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Djava.io.tmpdir=" + tempDir, "-cp", classpath,
-        AeronEngineServer.class.getName(), journalPath.toString()).redirectErrorStream(true)
-        .redirectOutput(serverLog.toFile()).start();
+        "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Daeron.ipc.mtu.length=" + IPC_MTU_LENGTH,
+        "-Djava.io.tmpdir=" + tempDir, "-cp", classpath, AeronEngineServer.class.getName(), journalPath.toString())
+        .redirectErrorStream(true).redirectOutput(serverLog.toFile()).start();
 
     try {
       awaitServerOutput(server, serverLog, "Server ready:");
@@ -140,7 +182,7 @@ class AeronEngineServerTest {
 
       List<List<CommandResult>> results = new ArrayList<>();
       for (List<EngineCommand> orders : clientSessions) {
-        results.add(exchangeCommands(server, serverLog, driverDirectory, orders, delayFinalReply));
+        results.add(exchangeCommands(server, serverLog, driverDirectory, orders, delayFinalReply, fragmentRequests));
         // The client's resources are closed, but the server must keep its book and driver alive.
         assertFalse(server.waitFor(250, TimeUnit.MILLISECONDS), "Server stopped after the client disconnected");
       }
@@ -164,7 +206,7 @@ class AeronEngineServerTest {
   }
 
   private static List<CommandResult> exchangeCommands(Process server, Path serverLog, Path driverDirectory,
-      List<EngineCommand> orders, boolean delayFinalReply) throws Exception {
+      List<EngineCommand> orders, boolean delayFinalReply, boolean fragmentRequests) throws Exception {
     List<CommandResult> received = new ArrayList<>();
     ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
     try (
@@ -175,18 +217,24 @@ class AeronEngineServerTest {
       CommandRequestCodec requestCodec = new CommandRequestCodec();
       CommandResponseCodec responseCodec = new CommandResponseCodec();
       SleepingIdleStrategy idle = new SleepingIdleStrategy();
-      UnsafeBuffer buffer = new UnsafeBuffer(ByteBuffer.allocateDirect(256));
+      ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
+      List<CommandResponse> responses = new ArrayList<>();
+      FragmentAssembler assembler = new FragmentAssembler((replyBuffer, offset, length, header) -> responses
+          .add(responseCodec.decode(replyBuffer.getStringAscii(offset))));
 
       for (int i = 0; i < orders.size(); i++) {
         CommandRequest request = new CommandRequest(UUID.randomUUID(), orders.get(i));
-        // Old replies may still be on the stream. Only this request's UUID can satisfy the wait.
-        FragmentHandler handler = (replyBuffer, offset, length, header) -> {
-          CommandResponse response = responseCodec.decode(replyBuffer.getStringAscii(offset));
-          if (request.requestId().equals(response.requestId())) {
-            received.add(response.result());
-          }
-        };
-        int length = buffer.putStringAscii(0, requestCodec.encode(request));
+        String encoded = requestCodec.encode(request);
+        if (fragmentRequests) {
+          // Leading zeroes keep a valid order ID while making the wire request span fragments.
+          encoded = encoded.replace(",PLACE,", ",PLACE," + "0".repeat(commands.maxPayloadLength()));
+          assertEquals(request, requestCodec.decode(encoded), "Padding must preserve the original command");
+        }
+        int length = buffer.putStringAscii(0, encoded);
+        if (fragmentRequests) {
+          assertTrue(length > commands.maxPayloadLength(), "The test must send a fragmented request");
+          assertTrue(length <= commands.maxMessageLength(), "The fixture must fit within Aeron's message limit");
+        }
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (commands.offer(buffer, 0, length) < 0) {
           assertTrue(System.nanoTime() - deadline < 0, "Timed out sending test command");
@@ -202,11 +250,18 @@ class AeronEngineServerTest {
 
         deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (received.size() <= i) {
-          replies.poll(handler, 1);
+          int fragments = replies.poll(assembler, 1);
+          // Only a complete response carrying this request's UUID can satisfy the wait.
+          for (CommandResponse response : responses) {
+            if (request.requestId().equals(response.requestId())) {
+              received.add(response.result());
+            }
+          }
+          responses.clear();
           assertTrue(server.isAlive(), "Server exited before replying\n" + Files.readString(serverLog));
           assertTrue(errors.isEmpty(), errors::toString);
           assertTrue(System.nanoTime() - deadline < 0, "Timed out receiving test reply");
-          idle.idle();
+          idle.idle(fragments);
         }
       }
 
