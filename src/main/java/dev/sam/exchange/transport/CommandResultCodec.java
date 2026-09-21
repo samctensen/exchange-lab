@@ -7,12 +7,15 @@ import java.util.StringJoiner;
 import dev.sam.exchange.engine.CancelResult;
 import dev.sam.exchange.engine.CommandResult;
 import dev.sam.exchange.engine.PlaceResult;
+import dev.sam.exchange.engine.RejectReason;
+import dev.sam.exchange.engine.RejectResult;
 import dev.sam.exchange.engine.Trade;
 
 public class CommandResultCodec {
 
   public String encode(CommandResult result) {
     return switch (result) {
+      case RejectResult reject -> "REJECT_RESULT," + reject.orderId() + "," + reject.reason();
       case CancelResult cancel -> "CANCEL_RESULT," + cancel.orderId() + "," + cancel.cancelled();
       case PlaceResult order -> {
         StringJoiner joiner = new StringJoiner(",");
@@ -27,7 +30,6 @@ public class CommandResultCodec {
           joiner.add(Long.toString(trade.priceTicks()));
           joiner.add(Long.toString(trade.quantityLots()));
         }
-
         yield joiner.toString();
       }
     };
@@ -36,22 +38,28 @@ public class CommandResultCodec {
   public CommandResult decode(String line) {
     String[] parts = line.split(",", -1);
     return switch (parts[0]) {
+      case "REJECT_RESULT" -> {
+        if (parts.length != 3) {
+          throw new IllegalArgumentException("Invalid REJECT_RESULT message: " + line);
+        }
+        yield new RejectResult(Long.parseLong(parts[1]), RejectReason.valueOf(parts[2]));
+      }
       case "CANCEL_RESULT" -> {
         if (parts.length != 3) {
-          throw new IllegalArgumentException("Invalid CANCEL command: " + line);
+          throw new IllegalArgumentException("Invalid CANCEL_RESULT message: " + line);
         }
         if (!parts[2].equals("true") && !parts[2].equals("false")) {
-          throw new IllegalArgumentException("Invalid CANCEL command: " + line);
+          throw new IllegalArgumentException("Invalid CANCEL_RESULT message: " + line);
         }
         yield new CancelResult(Long.parseLong(parts[1]), Boolean.parseBoolean(parts[2]));
       }
       case "PLACE_RESULT" -> {
         if (parts.length < 4) {
-          throw new IllegalArgumentException("Invalid PLACE command: " + line);
+          throw new IllegalArgumentException("Invalid PLACE_RESULT message: " + line);
         }
         int numTrades = Integer.parseInt(parts[3]);
         if (numTrades < 0 || parts.length != 4L + 4L * numTrades) {
-          throw new IllegalArgumentException("Invalid PLACE command: " + line);
+          throw new IllegalArgumentException("Invalid PLACE_RESULT message: " + line);
         }
         List<Trade> trades = new ArrayList<>();
         for (int i = 4; i < parts.length; i += 4) {

@@ -14,6 +14,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import dev.sam.exchange.engine.CancelResult;
 import dev.sam.exchange.engine.CommandResult;
 import dev.sam.exchange.engine.PlaceResult;
+import dev.sam.exchange.engine.RejectReason;
+import dev.sam.exchange.engine.RejectResult;
 import dev.sam.exchange.engine.Trade;
 
 class CommandResultCodecTest {
@@ -36,6 +38,7 @@ class CommandResultCodecTest {
     // Literal messages check the protocol independently of the encoder and decoder.
     return Stream.of(Arguments.of(new CancelResult(1L, true), "CANCEL_RESULT,1,true"),
         Arguments.of(new CancelResult(2L, false), "CANCEL_RESULT,2,false"),
+        Arguments.of(new RejectResult(1L, RejectReason.DUPLICATE_ORDER_ID), "REJECT_RESULT,1,DUPLICATE_ORDER_ID"),
         Arguments.of(new PlaceResult(1L, List.of(), 10L), "PLACE_RESULT,1,10,0"),
         Arguments.of(new PlaceResult(2L, List.of(new Trade(2L, 1L, 100L, 4L)), 0L), "PLACE_RESULT,2,0,1,2,1,100,4"),
         Arguments.of(new PlaceResult(3L, List.of(new Trade(3L, 1L, 101L, 4L), new Trade(3L, 2L, 100L, 5L)), 2L),
@@ -47,6 +50,14 @@ class CommandResultCodecTest {
   @ValueSource(strings = {"TRUE", "FALSE", "yes", ""})
   void rejectsInvalidCancelledFlag(String flag) {
     assertThrows(IllegalArgumentException.class, () -> codec.decode("CANCEL_RESULT,1," + flag));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"REJECT_RESULT,1", "REJECT_RESULT,1,DUPLICATE_ORDER_ID,", "REJECT_RESULT,1,",
+      "REJECT_RESULT,1,UNKNOWN", "REJECT_RESULT,1,duplicate_order_id", "REJECT_RESULT,nope,DUPLICATE_ORDER_ID",
+      "REJECT_RESULT,9223372036854775808,DUPLICATE_ORDER_ID"})
+  void rejectsMalformedRejectionResult(String encoded) {
+    assertThrows(IllegalArgumentException.class, () -> codec.decode(encoded));
   }
 
   @ParameterizedTest
