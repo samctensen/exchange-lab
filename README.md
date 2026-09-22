@@ -73,6 +73,19 @@ The project configures it for Maven tests and Zed terminals. Include it in the l
 
 The engine runner uses `BusySpinIdleStrategy`, following [Aeron’s guidance for low-latency subscribers](https://github.com/aeron-io/aeron/wiki/Best-Practices-Guide#application-threads). It keeps polling when idle and can consume roughly one CPU core. Budget a dedicated core for this approach in production; this demo leaves CPU placement to the operating system and does not reserve or pin a core. Stop the server with **⌃C** when finished.
 
+### Measure IPC round-trip latency
+
+Use a dedicated server with a **new, empty journal for each benchmark run**. The workload sends `CancelOrder(1)`; it should receive `cancelled=false` every time. Every warmup and measured request gets a fresh UUID and is journaled, so this measures the request path rather than cached replies. The benchmark fails if a response differs from the expected result.
+
+1. Stop any demo server using the same Aeron directory.
+2. Run `AeronEngineServer.main` with program arguments such as `data/latency-run-1.journal --quiet`, choosing an unused journal path. `--quiet` skips per-order result logging while keeping startup messages and errors visible.
+3. Run `AeronLatencyBenchmark.main`. Defaults are **500 warmup requests** followed by **2,000 measured requests**. Optional program arguments are `warmupCount sampleCount`, for example `100 1000`; warmup may be zero and samples must be positive.
+4. Stop the benchmark server with **⌃C** when finished. The benchmark closes its client connections and leaves the server running.
+
+The report gives p50, p99, and maximum latency in microseconds (`us`). Percentiles use the nearest-rank convention: p99 is the smallest observed value covering at least 99% of the samples. Each timer starts after request construction and ends when `client.send()` returns its matching response. Warmup, UUID generation, sorting, and report printing are outside the measured intervals. A send or reply failure aborts the run without printing partial statistics; requests get one attempt each.
+
+This is a baseline with one request outstanding at a time. It includes codecs, IPC transport, the server's missing-order cancellation path, journal writes, and idle-strategy delays. It does not exercise matching trades or measure maximum throughput. Journal writes still are not forced to disk, so these numbers do not represent power-loss durability. Repeat runs with fresh journals before drawing conclusions; 2,000 samples give only a small view of tail latency.
+
 ### Tests and layout
 
 Integration tests launch real JVMs and use isolated temporary journals and Aeron directories. They cover book and cached-reply recovery across server restarts, retries across client reconnects, automatic client retry limits and delayed duplicate replies, UUID conflicts followed by valid commands, shutdown, fragmented requests and trade replies, and ignoring unrelated or stale replies.

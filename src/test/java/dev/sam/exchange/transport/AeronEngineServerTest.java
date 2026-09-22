@@ -272,7 +272,7 @@ class AeronEngineServerTest {
     String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
     Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
         "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Djava.io.tmpdir=" + tempDir, "-cp", classpath,
-        AeronEngineServer.class.getName(), journalPath.toString()).redirectErrorStream(true)
+        AeronEngineServer.class.getName(), journalPath.toString(), "--quiet").redirectErrorStream(true)
         .redirectOutput(serverLog.toFile()).start();
     CommandRequest request = new CommandRequest(new UUID(0L, 1L), new PlaceOrder(1L, Side.BID, 100L, 10L));
     ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
