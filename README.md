@@ -66,6 +66,8 @@ Both processes must use the same `java.io.tmpdir`, where the server creates `exc
 
 The project configures it for Maven tests and Zed terminals. Include it in the launch configuration when running elsewhere. Use matching client/server versions: the IPC protocol now expects `REQUEST,<uuid>,<command>` and `RESPONSE,<uuid>,<result>` wrappers.
 
+`AeronEngineServer.main` owns recovery, Aeron resources, shutdown, and idling. `AeronEngineAgent.doWork()` performs one processing pass: it assembles requests, processes a complete command, and attempts to publish its response once. An unsent reply keeps its encoded bytes and original deadline between passes; the agent waits to process another request until that reply is queued. This lets the outer loop check shutdown between send attempts. Journal writes remain synchronous on the server thread. Tests cover shutdown both while idle and while a reply has no subscriber.
+
 ### Tests and layout
 
 Integration tests launch real JVMs and use isolated temporary journals and Aeron directories. They cover book and cached-reply recovery across server restarts, retries across client reconnects, UUID conflicts followed by valid commands, shutdown, fragmented requests and trade replies, and ignoring unrelated or stale replies.
