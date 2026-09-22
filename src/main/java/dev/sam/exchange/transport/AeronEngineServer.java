@@ -18,6 +18,18 @@ import io.aeron.driver.MediaDriver;
 public class AeronEngineServer {
   public static void main(String[] args) throws IOException, InterruptedException {
 
+    String journalArgument = null;
+    boolean quiet = false;
+    for (String arg : args) {
+      if ("--quiet".equals(arg)) {
+        quiet = true;
+      } else if (journalArgument == null && !arg.startsWith("--")) {
+        journalArgument = arg;
+      } else {
+        throw new IllegalArgumentException("Usage: AeronEngineServer [journalPath] [--quiet]");
+      }
+    }
+
     AtomicBoolean shutdownRequested = new AtomicBoolean(false);
     AtomicReference<Throwable> agentFailure = new AtomicReference<>();
     ErrorHandler errorHandler = error -> {
@@ -41,7 +53,7 @@ public class AeronEngineServer {
     }, "server-shutdown"));
 
     // Recover the existing journal before accepting new requests.
-    Path journalPath = args.length > 0 ? Path.of(args[0]) : Path.of("data", "requests.journal");
+    Path journalPath = journalArgument != null ? Path.of(journalArgument) : Path.of("data", "requests.journal");
     Path parent = journalPath.getParent();
     if (parent != null) {
       Files.createDirectories(parent);
@@ -63,7 +75,7 @@ public class AeronEngineServer {
         Publication replies = aeron.addPublication("aeron:ipc", 2);
         // Busy spinning keeps polling for requests; budget a dedicated core for this runner.
         AgentRunner runner = new AgentRunner(new BusySpinIdleStrategy(), errorHandler, null,
-            new AeronEngineAgent(subscription, replies, requestProcessor))) {
+            new AeronEngineAgent(subscription, replies, requestProcessor, !quiet))) {
 
       AgentRunner.startOnThread(runner);
 

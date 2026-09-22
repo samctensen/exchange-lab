@@ -17,6 +17,7 @@ public class AeronEngineAgent implements Agent {
   private final Subscription requests;
   private final Publication replies;
   private final RequestProcessor processor;
+  private final boolean logResults;
 
   private CommandResponse pendingResponse;
   private int pendingResponseLength;
@@ -34,9 +35,14 @@ public class AeronEngineAgent implements Agent {
   private final FragmentAssembler assembler = new FragmentAssembler(handler);
 
   public AeronEngineAgent(Subscription requests, Publication replies, RequestProcessor processor) {
+    this(requests, replies, processor, true);
+  }
+
+  public AeronEngineAgent(Subscription requests, Publication replies, RequestProcessor processor, boolean logResults) {
     this.requests = requests;
     this.replies = replies;
     this.processor = processor;
+    this.logResults = logResults;
   }
 
   @Override
@@ -79,7 +85,9 @@ public class AeronEngineAgent implements Agent {
     long offerResult = replies.offer(buffer, 0, pendingResponseLength);
 
     if (offerResult >= 0) {
-      System.out.println("Result: " + pendingResponse.result());
+      if (logResults) {
+        System.out.println("Result: " + pendingResponse.result());
+      }
       pendingResponse = null;
       return 1;
     }
