@@ -4,9 +4,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
-import org.agrona.concurrent.IdleStrategy;
-import org.agrona.concurrent.SleepingIdleStrategy;
+import org.agrona.ErrorHandler;
+import org.agrona.concurrent.AgentRunner;
+import org.agrona.concurrent.BusySpinIdleStrategy;
 
 import io.aeron.Aeron;
 import io.aeron.Publication;
@@ -14,18 +16,22 @@ import io.aeron.Subscription;
 import io.aeron.driver.MediaDriver;
 
 public class AeronEngineServer {
-  public static void main(String[] args) throws IOException {
+  public static void main(String[] args) throws IOException, InterruptedException {
 
     AtomicBoolean shutdownRequested = new AtomicBoolean(false);
+    AtomicReference<Throwable> agentFailure = new AtomicReference<>();
+    ErrorHandler errorHandler = error -> {
+      agentFailure.compareAndSet(null, error);
+      shutdownRequested.set(true);
+      Thread.currentThread().interrupt();
+    };
     Thread serverThread = Thread.currentThread();
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-      // Ask the main thread to leave its processing loop.
+      // Ask the main thread to begin closing the server.
       shutdownRequested.set(true);
-
       try {
         // Give it time to finish and close the try-with-resources block.
         serverThread.join(10_000);
-
         if (serverThread.isAlive()) {
           System.err.println("Server shutdown exceeded 10 seconds");
         }
@@ -54,19 +60,25 @@ public class AeronEngineServer {
             .launchEmbedded(new MediaDriver.Context().aeronDirectoryName(aeronDirectory).dirDeleteOnShutdown(true));
         Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()));
         Subscription subscription = aeron.addSubscription("aeron:ipc", 1);
-        Publication replies = aeron.addPublication("aeron:ipc", 2)) {
+        Publication replies = aeron.addPublication("aeron:ipc", 2);
+        // Busy spinning keeps polling for requests; budget a dedicated core for this runner.
+        AgentRunner runner = new AgentRunner(new BusySpinIdleStrategy(), errorHandler, null,
+            new AeronEngineAgent(subscription, replies, requestProcessor))) {
 
-      AeronEngineAgent agent = new AeronEngineAgent(subscription, replies, requestProcessor);
-      IdleStrategy idle = new SleepingIdleStrategy();
+      AgentRunner.startOnThread(runner);
 
       System.out.println("Server ready: " + aeronDirectory);
       System.out.println("Journal: " + journalPath);
       System.out.println("Waiting for requests.");
 
-      while (!shutdownRequested.get()) {
-        int workCount = agent.doWork();
-        idle.idle(workCount);
+      // The runner processes requests. Main waits here to keep resources open.
+      while (!shutdownRequested.get() && !runner.isClosed()) {
+        Thread.sleep(10);
       }
+    }
+    Throwable failure = agentFailure.get();
+    if (failure != null) {
+      throw new IllegalStateException("Engine agent failed", failure);
     }
   }
 }

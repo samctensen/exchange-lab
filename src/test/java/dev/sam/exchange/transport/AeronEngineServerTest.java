@@ -18,6 +18,8 @@ import org.agrona.concurrent.SleepingIdleStrategy;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.CancelResult;
@@ -252,6 +254,73 @@ class AeronEngineServerTest {
       assertFalse(output.contains("Server shutdown exceeded"), output);
       assertFalse(Files.exists(driverDirectory), "Shutdown did not remove the Aeron driver directory\n" + output);
       assertEquals(List.of(request), new RequestJournal(journalPath).readAll());
+    } finally {
+      if (server.isAlive()) {
+        server.destroyForcibly();
+        server.waitFor(3, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  @ParameterizedTest(name = "journal write fails: {0}")
+  @ValueSource(booleans = {false, true})
+  @Timeout(15)
+  void reportsAgentFailureAndClosesResources(boolean failJournal, @TempDir Path tempDir) throws Exception {
+    Path journalPath = tempDir.resolve("requests.journal");
+    Path serverLog = tempDir.resolve("server.log");
+    Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
+    String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+    Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+        "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Djava.io.tmpdir=" + tempDir, "-cp", classpath,
+        AeronEngineServer.class.getName(), journalPath.toString()).redirectErrorStream(true)
+        .redirectOutput(serverLog.toFile()).start();
+    CommandRequest request = new CommandRequest(new UUID(0L, 1L), new PlaceOrder(1L, Side.BID, 100L, 10L));
+    ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
+
+    try {
+      awaitServerOutput(server, serverLog, "Server ready:");
+      if (failJournal) {
+        // Recovery has finished. Replacing the empty journal with a directory makes the next append fail.
+        Files.delete(journalPath);
+        Files.createDirectory(journalPath);
+      }
+      try (
+          Aeron aeron = Aeron
+              .connect(new Aeron.Context().aeronDirectoryName(driverDirectory.toString()).errorHandler(errors::add));
+          Publication commands = aeron.addPublication("aeron:ipc", 1)) {
+        ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
+        int length = buffer.putStringAscii(0, new CommandRequestCodec().encode(request));
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        SleepingIdleStrategy idle = new SleepingIdleStrategy();
+        while (commands.offer(buffer, 0, length) < 0) {
+          assertTrue(server.isAlive(), "Server exited before the test could send its request");
+          assertTrue(System.nanoTime() - deadline < 0, "Test request could not be sent");
+          idle.idle();
+        }
+        assertTrue(errors.isEmpty(), errors::toString);
+
+        // No reply subscriber connects: a successful journal write is followed by the reply-send timeout.
+        assertTrue(server.waitFor(8, TimeUnit.SECONDS),
+            "Agent failure did not stop the server\n" + Files.readString(serverLog));
+        assertTrue(server.exitValue() != 0, "Agent failure was reported as a successful process exit");
+      }
+      String output = Files.readString(serverLog);
+      assertTrue(output.contains("IllegalStateException: Engine agent failed"), output);
+      String expectedCause = failJournal
+          ? "Caused by: java.nio.file.FileSystemException:"
+          : "Caused by: java.lang.IllegalStateException: Timed out sending reply";
+      assertTrue(output.contains(expectedCause),
+          "The original agent failure must remain the exception cause\n" + output);
+      assertFalse(output.contains("Server shutdown exceeded"), output);
+      assertFalse(output.contains("failed to close"), output);
+      assertFalse(output.contains("Result:"), "An undelivered response must not be logged as sent\n" + output);
+      assertFalse(Files.exists(driverDirectory), "The runner and driver were not closed after failure\n" + output);
+      if (failJournal) {
+        assertTrue(Files.isDirectory(journalPath), "The test's unwritable journal must remain untouched");
+      } else {
+        assertEquals(List.of(request), new RequestJournal(journalPath).readAll(),
+            "A reply failure must preserve the single journaled command for recovery");
+      }
     } finally {
       if (server.isAlive()) {
         server.destroyForcibly();
