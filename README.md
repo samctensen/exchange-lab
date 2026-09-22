@@ -17,6 +17,7 @@ The project currently uses plain Java 25, Maven, and JUnit 5:
 - Request journaling and deterministic replay for normal server restarts.
 - Separate Aeron IPC client and server processes, with UUIDs connecting requests to replies.
 - Request deduplication across client reconnects and normal server restarts.
+- Bounded client retries after reply timeouts, reusing the same UUID and command.
 - A server that stays available between client sessions and closes its resources on a shutdown request.
 
 This is a learning implementation. Best-price selection still scans the book, and the server processes commands on one thread.
@@ -35,6 +36,8 @@ Client: CommandRequest(UUID, EngineCommand)
 A duplicate order ID that is still on the book produces a `RejectResult` without changing the book. First-time requests are journaled even when rejected, so replay can reconstruct the same response. Cancelling a missing order returns `CancelResult` with `cancelled=false`.
 
 The server remembers each completed request's UUID, command, and response. Retrying the same UUID and command returns the original response without changing the journal or order book. Reusing a UUID with a different command returns `REQUEST_ID_CONFLICT` and preserves the original cached entry. Journal-write failures propagate without caching a response.
+
+After a reply timeout, the client resends the same request, up to three total attempts by default. A delayed matching reply completes the request; duplicate replies for an earlier order are ignored. If all attempts go unanswered, the client stops before sending the next order and reports the request UUID with an unknown outcome, since the server may already have processed it. A send failure on a later attempt also preserves the request UUID and unknown-outcome diagnostic.
 
 The journal stores request UUIDs together with engine commands. Recovery applies those requests in order to rebuild both the book and cached responses, without appending them again. Repeated UUIDs in the journal are rejected as corruption; live retries and UUID conflicts never append another entry.
 
@@ -68,29 +71,32 @@ The project configures it for Maven tests and Zed terminals. Include it in the l
 
 ### Tests and layout
 
-Integration tests launch real JVMs and use isolated temporary journals and Aeron directories. They cover book and cached-reply recovery across server restarts, retries across client reconnects, UUID conflicts followed by valid commands, shutdown, fragmented requests and trade replies, and ignoring unrelated or stale replies.
+Integration tests launch real JVMs and use isolated temporary journals and Aeron directories. They cover book and cached-reply recovery across server restarts, retries across client reconnects, automatic client retry limits and delayed duplicate replies, UUID conflicts followed by valid commands, shutdown, fragmented requests and trade replies, and ignoring unrelated or stale replies.
 
 Code lives under `src/main/java/dev/sam/exchange`:
 
 - `engine`: order book, matching, commands, results, snapshots, and replay.
 - `persistence`: text command codec, the original command journal, and the request journal used by the server.
-- `transport`: Aeron demos, request/response codecs, request deduplication, and request recovery.
+- `transport`: Aeron demos, reusable `AeronRequestClient`, request/response codecs, request deduplication, and request recovery.
 - `JournaledEngine`: the earlier command-only validation, journaling, processing, and recovery lesson.
+
+`AeronEngineClient.main` creates and closes the Aeron connections, assigns request UUIDs, and prints results. `AeronRequestClient` borrows the publication and subscription and handles encoding, retries, and correlated replies. Use each client instance from one thread, with one request at a time.
+
+`ClientConfig` sets the timeout for each send and reply wait and the maximum number of attempts. Defaults remain five seconds and three attempts. Configuration requires a non-null positive duration and at least one attempt.
 
 Tests mirror these packages under `src/test/java`. Zed and Spotless share Eclipse formatting preferences, and Zed formats Java on save.
 
 ## Current demo limits
 
-- The client uses a 256-byte send buffer for the current small commands. The server grows its reply buffer, and both receivers reassemble fragmented messages. Messages must still fit within Aeron's maximum message length.
-- The client waits for one request at a time. Reply-send failures time out after five seconds and currently stop the server.
+- The client grows its request buffer, the server grows its reply buffer, and both receivers reassemble fragmented messages. Messages must still fit within Aeron's maximum message length.
+- The client waits for one request at a time. Each send and reply wait has a five-second deadline by default; send failures still stop the client. Client request IDs are held in memory, so automatic retries apply within the current client run. Server reply-send failures time out after five seconds and currently stop the server.
 - Journal writes are not explicitly forced to disk. Recovery tests cover normal restarts; an incomplete final journal line is rejected.
-- The request cache and journal grow without a retention limit. Startup reads and replays the whole journal. The client does not yet retry requests after reply timeouts.
+- The request cache and journal grow without a retention limit. Startup reads and replays the whole journal.
 
 ## What I want to explore next
 
-1. Retry timed-out client requests using the same UUID.
-2. Refine client sessions, reply delivery, and service lifecycle behavior.
-3. Measure throughput and tail latency, then study allocation, GC, data layout, and JVM behavior.
-4. Introduce Aeron Cluster, replicated execution, persisted snapshots, and failover.
+1. Refine client sessions, reply delivery, and service lifecycle behavior.
+2. Measure throughput and tail latency, then study allocation, GC, data layout, and JVM behavior.
+3. Introduce Aeron Cluster, replicated execution, persisted snapshots, and failover.
 
 The idea is to build understanding incrementally and let measurements guide the performance work.
