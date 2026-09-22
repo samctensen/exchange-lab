@@ -207,6 +207,59 @@ class AeronEngineServerTest {
     assertEquals("", Files.readString(journalPath));
   }
 
+  @Test
+  @Timeout(20)
+  void shutsDownWhileAReplyHasNoSubscriber(@TempDir Path tempDir) throws Exception {
+    Path journalPath = tempDir.resolve("requests.journal");
+    Path serverLog = tempDir.resolve("server.log");
+    Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
+    String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+    Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+        "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Djava.io.tmpdir=" + tempDir, "-cp", classpath,
+        AeronEngineServer.class.getName(), journalPath.toString()).redirectErrorStream(true)
+        .redirectOutput(serverLog.toFile()).start();
+    CommandRequest request = new CommandRequest(new UUID(0L, 1L), new PlaceOrder(1L, Side.BID, 100L, 10L));
+    ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
+
+    try {
+      awaitServerOutput(server, serverLog, "Server ready:");
+      try (
+          Aeron aeron = Aeron
+              .connect(new Aeron.Context().aeronDirectoryName(driverDirectory.toString()).errorHandler(errors::add));
+          Publication commands = aeron.addPublication("aeron:ipc", 1)) {
+        // Publish a request without ever creating a reply subscription.
+        ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
+        int length = buffer.putStringAscii(0, new CommandRequestCodec().encode(request));
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        SleepingIdleStrategy idle = new SleepingIdleStrategy();
+        while (commands.offer(buffer, 0, length) < 0) {
+          assertTrue(System.nanoTime() - deadline < 0, "Test request could not be sent");
+          idle.idle();
+        }
+        while (Files.size(journalPath) == 0) {
+          assertTrue(server.isAlive(), "Server exited before journaling the request");
+          assertTrue(System.nanoTime() - deadline < 0, "Request was never journaled");
+          idle.idle();
+        }
+        assertTrue(errors.isEmpty(), errors::toString);
+      }
+
+      // SIGTERM must leave the loop without waiting for the five-second reply timeout.
+      server.destroy();
+      assertTrue(server.waitFor(3, TimeUnit.SECONDS), "Shutdown waited on an undeliverable reply");
+      String output = Files.readString(serverLog);
+      assertFalse(output.contains("Exception"), output);
+      assertFalse(output.contains("Server shutdown exceeded"), output);
+      assertFalse(Files.exists(driverDirectory), "Shutdown did not remove the Aeron driver directory\n" + output);
+      assertEquals(List.of(request), new RequestJournal(journalPath).readAll());
+    } finally {
+      if (server.isAlive()) {
+        server.destroyForcibly();
+        server.waitFor(3, TimeUnit.SECONDS);
+      }
+    }
+  }
+
   private static List<EngineCommand> journalCommands(Path path) throws IOException {
     return new RequestJournal(path).readAll().stream().map(CommandRequest::command).toList();
   }
