@@ -86,6 +86,43 @@ The report gives p50, p99, and maximum latency in microseconds (`us`). Percentil
 
 This is a baseline with one request outstanding at a time. It includes codecs, IPC transport, the server's missing-order cancellation path, journal writes, and idle-strategy delays. It does not exercise matching trades or measure maximum throughput. Journal writes still are not forced to disk, so these numbers do not represent power-loss durability. Repeat runs with fresh journals before drawing conclusions; 2,000 samples give only a small view of tail latency.
 
+### Encode commands and requests with Simple Binary Encoding (SBE)
+
+Run `mvn generate-sources` once, then run `SbeOrderDemo.main` in Zed using the existing `--add-opens` JVM option. It prints the original order, message header, binary bytes in hex, and the decoded order. The final line should be `Equal: true`. This example runs entirely in memory.
+
+Start with these files:
+
+1. `src/main/resources/sbe/orders.xml`: the message schema, defining field types, field order, explicit BID/ASK values, and the header.
+2. `src/main/java/dev/sam/exchange/protocol/SbeCommandCodec.java`: adapts `PlaceOrder` and `CancelOrder` to generated buffer encoders/decoders.
+3. `src/main/java/dev/sam/exchange/protocol/SbeRequestCodec.java`: encodes and decodes `CommandRequest`, preserving its UUID and command.
+4. `src/main/java/dev/sam/exchange/transport/SbeOrderDemo.java`: the runnable walkthrough.
+
+Maven generates Java codecs under `target/generated-sources/sbe` during `generate-sources`, before compilation and tests. Edit the XML schema and regenerate; generated Java files stay out of Git. The generation execution includes an m2e configuration hint so Zed's Java importer registers that source directory. SBE's generator is a build-plugin dependency, so it does not add a generator dependency to the application's runtime. It is pinned to 1.40.1, which uses our existing Agrona 2.6.0 version.
+
+Every message starts with an 8-byte header. Numbers use little-endian byte order (least significant byte first).
+
+| Message | Template ID | Body bytes | Total bytes |
+| --- | --- | --- | --- |
+| `PlaceOrder` | 1 | 25 | 33 |
+| `CancelOrder` | 2 | 8 | 16 |
+| `PlaceOrderRequest` | 3 | 41 | 49 |
+| `CancelOrderRequest` | 4 | 24 | 32 |
+
+A place command contains an 8-byte order ID, 1-byte side, 8-byte price, and 8-byte quantity. A cancellation contains only the order ID. Request messages prepend the UUID's most-significant and least-significant 64-bit halves to those command fields, adding 16 bytes. Decoding reconstructs the original UUID so later request processing can recognize retries.
+
+| Header field | Meaning in this schema |
+| --- | --- |
+| `blockLength` | Fixed body size for the selected template, excluding the header. |
+| `templateId` | Identifies one of the four message layouts above. |
+| `schemaId` | Schema identifier: 1 means our exchange schema. |
+| `version` | Schema version: currently 0. |
+
+Each adapter reuses its generated encoders and decoders; use each adapter on one thread. Generated codecs wrap the caller's buffer, while decoding creates domain records with independent values. The adapters validate the supplied frame bounds, schema, version, template-specific body size, and side. `PlaceOrder` retains price/quantity validation. They accept only the exact version-zero layouts; schema evolution will need an explicit compatibility policy.
+
+Tests cover independent binary fixtures, both sides, full-width long and UUID values, nonzero offsets, decoder reuse across buffers, and malformed messages. The live IPC server still uses its text request/response codecs and `RequestJournal`.
+
+Reference: [SBE Java users guide](https://github.com/aeron-io/simple-binary-encoding/wiki/Java-Users-Guide).
+
 ### Tests and layout
 
 Integration tests launch real JVMs and use isolated temporary journals and Aeron directories. They cover book and cached-reply recovery across server restarts, retries across client reconnects, automatic client retry limits and delayed duplicate replies, UUID conflicts followed by valid commands, shutdown, fragmented requests and trade replies, and ignoring unrelated or stale replies.
@@ -94,6 +131,7 @@ Code lives under `src/main/java/dev/sam/exchange`:
 
 - `engine`: order book, matching, commands, results, snapshots, and replay.
 - `persistence`: text command codec, the original command journal, and the request journal used by the server.
+- `protocol`: SBE adapters, with generated message codecs in `protocol.sbe` under the build output directory.
 - `transport`: Aeron demos, reusable `AeronRequestClient`, request/response codecs, request deduplication, and request recovery.
 - `JournaledEngine`: the earlier command-only validation, journaling, processing, and recovery lesson.
 
