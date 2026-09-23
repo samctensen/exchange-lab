@@ -1,4 +1,4 @@
-package dev.sam.exchange.persistence;
+package dev.sam.exchange.protocol;
 
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.EngineCommand;

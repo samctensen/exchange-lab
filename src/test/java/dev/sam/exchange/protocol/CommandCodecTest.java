@@ -1,4 +1,4 @@
-package dev.sam.exchange.persistence;
+package dev.sam.exchange.protocol;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;

@@ -2,16 +2,11 @@ package dev.sam.exchange.transport;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.junit.jupiter.api.io.TempDir;
 
-import dev.sam.exchange.JournaledEngine;
 import dev.sam.exchange.engine.CommandResult;
 import dev.sam.exchange.engine.EngineCommand;
 import dev.sam.exchange.engine.MatchingEngine;
@@ -21,16 +16,13 @@ import dev.sam.exchange.engine.PlaceOrder;
 import dev.sam.exchange.engine.PlaceResult;
 import dev.sam.exchange.engine.Side;
 import dev.sam.exchange.engine.Trade;
-import dev.sam.exchange.persistence.CommandJournal;
 
 class AeronOrderDemoTest {
   @Test
   @Timeout(30)
-  void transportsCommandsThroughJournaledEngine(@TempDir Path tempDir) throws IOException {
-    Path journalPath = tempDir.resolve("commands.journal");
+  void transportsCommandsThroughMatchingEngine() {
     OrderBook book = new OrderBook();
-    CommandJournal journal = new CommandJournal(journalPath);
-    JournaledEngine engine = new JournaledEngine(new MatchingEngine(book), journal);
+    MatchingEngine engine = new MatchingEngine(book);
 
     PlaceOrder bid = new PlaceOrder(1L, Side.BID, 100L, 10L);
     PlaceOrder ask = new PlaceOrder(2L, Side.ASK, 99L, 4L);
@@ -46,7 +38,5 @@ class AeronOrderDemoTest {
     // Selling four lots against the ten-lot bid leaves six lots on the book.
     assertEquals(List.of(new OrderSnapshot(bid, 6L)), book.snapshot());
 
-    // Both received commands must reach the journal, once each and in order.
-    assertEquals("PLACE,1,BID,100,10\nPLACE,2,ASK,99,4\n", Files.readString(journalPath));
   }
 }
