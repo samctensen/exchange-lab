@@ -123,6 +123,38 @@ Tests cover independent binary fixtures, both sides, full-width long and UUID va
 
 Reference: [SBE Java users guide](https://github.com/aeron-io/simple-binary-encoding/wiki/Java-Users-Guide).
 
+### Record and replay SBE requests with Aeron Archive
+
+Run `AeronArchiveDemo.main` in Zed with the same `--add-opens` JVM option shown above. It starts its own embedded Archive and Media Driver with a unique driver directory. No separate server or client is needed.
+
+The demo:
+
+1. Creates a temporary directory for Archive's catalog and recording files.
+2. Wraps a ten-lot bid at 100 and a four-lot ask at 99 in requests with UUIDs, encodes them using `SbeRequestCodec`, and publishes the binary messages on recorded IPC stream **1001**.
+3. Waits until Archive's recording position reaches the publication's final position, then stops the recording.
+4. Closes Archive and the driver, then starts new instances using the saved archive directory.
+5. Replays the saved recording onto IPC stream **1002** and decodes the messages into an immutable list of requests.
+6. Checks that the UUIDs and commands match the original requests, then uses `ReplayRunner` to apply the recovered commands to a fresh matching engine.
+
+The output should include **`Requests preserved: true`**, a **four-lot trade at 100**, and a recovered book containing **six remaining bid lots**. The archive directory stays on disk after the demo; each main run creates a new directory. Driver shared-memory files are removed on shutdown.
+
+Read the class in this order: `main`, `record`, `replay`, then the setup/wait helpers. The new types are:
+
+| Type | Role in the demo |
+| --- | --- |
+| `ArchivingMediaDriver` | Owns an embedded Media Driver and Archive service. |
+| `AeronArchive` | Control client used to request recording, stopping, and replay. |
+| `RecordingPos` | Finds a recording's ID and progress counter for the publication session. |
+| `Image` | The particular replay session being consumed; its position tells us when replay finishes. |
+
+A **recording ID** identifies saved data in the archive catalog. The **recording subscription ID** returned by `startRecording` identifies the subscription to stop. A **position** counts framed stream bytes, not orders. Keep application streams distinct from Archive's control streams, which default to 10 and 20.
+
+Archive records the published bytes. The replay handler passes the fragment assembler's buffer, offset, and length directly to `SbeRequestCodec`; it recovers requests without consulting the original request list. Integration tests verify UUID and request order preservation, trade prices, remaining quantities, empty recordings, repeated requests across multiple polling batches, and selecting recordings across Archive restarts.
+
+This standalone lesson preserves repeated requests exactly as recorded. `ReplayRunner` applies every command; rebuilding the request deduplication cache is a later step. The live exchange server still uses `RequestJournal` for retry recovery. The demo explicitly uses file/catalog sync level zero: it demonstrates normal-restart recovery, not power-loss durability. Its waits have five-second deadlines and use sleeping idling; it is a small learning demo, not a latency benchmark.
+
+Reference: [Aeron Archive overview](https://aeron.io/docs/aeron-archive/overview/).
+
 ### Tests and layout
 
 Integration tests launch real JVMs and use isolated temporary journals and Aeron directories. They cover book and cached-reply recovery across server restarts, retries across client reconnects, automatic client retry limits and delayed duplicate replies, UUID conflicts followed by valid commands, shutdown, fragmented requests and trade replies, and ignoring unrelated or stale replies.
@@ -152,6 +184,7 @@ Tests mirror these packages under `src/test/java`. Zed and Spotless share Eclips
 
 1. Refine client sessions, reply delivery, and service lifecycle behavior.
 2. Measure throughput and tail latency, then study allocation, GC, data layout, and JVM behavior.
-3. Introduce Aeron Cluster, replicated execution, persisted snapshots, and failover.
+3. Integrate Aeron Archive recording/replay with the server's recovery and request deduplication.
+4. Introduce Aeron Cluster, replicated execution, persisted snapshots, and failover.
 
 The idea is to build understanding incrementally and let measurements guide the performance work.
