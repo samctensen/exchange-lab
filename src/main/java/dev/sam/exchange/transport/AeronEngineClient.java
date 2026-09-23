@@ -1,12 +1,16 @@
 package dev.sam.exchange.transport;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
+import dev.sam.exchange.engine.CommandResult;
 import dev.sam.exchange.engine.EngineCommand;
 import dev.sam.exchange.engine.PlaceOrder;
 import dev.sam.exchange.engine.Side;
+import dev.sam.exchange.gateway.EngineGateway;
 import io.aeron.Aeron;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -28,9 +32,21 @@ public class AeronEngineClient {
 
       AeronRequestClient client = new AeronRequestClient(publication, replies);
 
-      for (EngineCommand order : orders) {
-        CommandRequest request = new CommandRequest(UUID.randomUUID(), order);
-        System.out.println(client.send(request));
+      try (EngineGateway gateway = new EngineGateway(client, 128)) {
+        gateway.start();
+
+        List<CompletableFuture<CommandResult>> results = new ArrayList<>();
+
+        // Submit every order and collect its future.
+        for (EngineCommand order : orders) {
+          CommandRequest request = new CommandRequest(UUID.randomUUID(), order);
+          results.add(gateway.submit(request));
+        }
+
+        // Then wait for each result and print it.
+        for (CompletableFuture<CommandResult> result : results) {
+          System.out.println(result.join());
+        }
       }
     }
   }
