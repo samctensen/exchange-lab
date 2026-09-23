@@ -34,6 +34,53 @@ import io.aeron.driver.MediaDriver;
 import io.aeron.logbuffer.FragmentHandler;
 
 class AeronEngineClientTest {
+  @Test
+  @Timeout(30)
+  void gatewayBatchMatchesAndIsRecordedByTheRealServer(@TempDir Path tempDir) throws Exception {
+    Path archiveDirectory = tempDir.resolve("archive");
+    Path serverLog = tempDir.resolve("server.log");
+    Path clientLog = tempDir.resolve("client.log");
+    String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+    Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+        "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Djava.io.tmpdir=" + tempDir, "-cp", classpath,
+        AeronEngineServer.class.getName(), archiveDirectory.toString()).redirectErrorStream(true)
+        .redirectOutput(serverLog.toFile()).start();
+    Process client = null;
+    try {
+      awaitServerReady(server, serverLog);
+      client = startClient(tempDir, clientLog);
+      assertTrue(client.waitFor(10, TimeUnit.SECONDS), "Gateway client did not finish\n" + Files.readString(clientLog));
+      String output = Files.readString(clientLog);
+      assertEquals(0, client.exitValue(), output);
+      assertEquals(List.of("PlaceResult[orderId=1, trades=[], remainingLots=10]",
+          "PlaceResult[orderId=2, trades=[Trade[incomingOrderId=2, restingOrderId=1, priceTicks=100, quantityLots=4]], remainingLots=0]"),
+          output.lines().filter(line -> line.startsWith("PlaceResult[")).toList());
+      assertFalse(output.contains("Exception"), output);
+      assertTrue(server.isAlive(), "Client shutdown must leave the exchange running");
+
+      // Stop the real server cleanly before reopening its Archive to verify the recorded batch.
+      server.destroy();
+      assertTrue(server.waitFor(12, TimeUnit.SECONDS), "Server did not shut down cleanly");
+      String serverOutput = Files.readString(serverLog);
+      assertFalse(serverOutput.contains("Exception"), serverOutput);
+      assertFalse(serverOutput.contains("Server shutdown exceeded"), serverOutput);
+      assertFalse(Files.exists(tempDir.resolve("exchange-lab-aeron")), serverOutput);
+      List<CommandRequest> recorded = ArchiveTestSupport.readAll(archiveDirectory);
+      assertEquals(List.of(new PlaceOrder(1L, Side.BID, 100L, 10L), new PlaceOrder(2L, Side.ASK, 99L, 4L)),
+          recorded.stream().map(CommandRequest::command).toList());
+      assertNotEquals(recorded.get(0).requestId(), recorded.get(1).requestId());
+    } finally {
+      if (client != null && client.isAlive()) {
+        client.destroyForcibly();
+        client.waitFor(3, TimeUnit.SECONDS);
+      }
+      if (server.isAlive()) {
+        server.destroyForcibly();
+        server.waitFor(3, TimeUnit.SECONDS);
+      }
+    }
+  }
+
   @ParameterizedTest(name = "fragmented replies: {0}")
   @ValueSource(booleans = {false, true})
   @Timeout(30)
@@ -170,7 +217,7 @@ class AeronEngineClientTest {
 
   @Test
   @Timeout(30)
-  void stopsAfterThreeUnansweredAttemptsAndReportsUnknownOutcome(@TempDir Path tempDir) throws Exception {
+  void drainsAcceptedBatchAfterRequestTimeoutAndReportsUnknownOutcome(@TempDir Path tempDir) throws Exception {
     Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
     Path clientLog = tempDir.resolve("client.log");
     ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
@@ -180,7 +227,8 @@ class AeronEngineClientTest {
             .aeronDirectoryName(driverDirectory.toString()).dirDeleteOnShutdown(true).errorHandler(errors::add));
         Aeron aeron = Aeron
             .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
-        Subscription commands = aeron.addSubscription("aeron:ipc", 1)) {
+        Subscription commands = aeron.addSubscription("aeron:ipc", 1);
+        Publication replies = aeron.addPublication("aeron:ipc", 2)) {
       Process client = startClient(tempDir, clientLog);
       try {
         List<String> messages = new ArrayList<>();
@@ -189,23 +237,27 @@ class AeronEngineClientTest {
         CommandRequest first = new CommandRequestCodec().decode(messages.getFirst());
         assertEquals(new PlaceOrder(1L, Side.BID, 100L, 10L), first.command());
 
-        // Receive every attempt, but never publish a reply. Keep polling until the client exits.
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(22);
-        SleepingIdleStrategy idle = new SleepingIdleStrategy();
-        while (client.isAlive()) {
-          int fragments = commands.poll(handler, 10);
-          assertTrue(messages.size() <= 3, "Client exceeded its three-attempt limit: " + messages);
-          assertTrue(System.nanoTime() - deadline < 0, "Client did not stop after exhausting its attempts");
-          idle.idle(fragments);
-        }
+        // Withhold all replies to the first request. After its three attempts, graceful close must
+        // drain the second request, which the demo already accepted into the gateway's queue.
+        awaitCommandCount(commands, handler, messages, 4, client, clientLog, 18);
+        assertEquals(List.of(messages.getFirst(), messages.getFirst(), messages.getFirst()), messages.subList(0, 3),
+            "Retry the first request exactly three times with unchanged bytes");
+        CommandRequest second = new CommandRequestCodec().decode(messages.get(3));
+        assertEquals(new PlaceOrder(2L, Side.ASK, 99L, 4L), second.command());
+        assertNotEquals(first.requestId(), second.requestId());
+
+        // Main has observed the first failure, but must keep Aeron open until this accepted work finishes.
+        assertStillWaiting(commands, handler, messages, 4, client, clientLog);
+        sendResponse(replies,
+            new CommandResponse(second.requestId(), new PlaceResult(2L, List.of(new Trade(2L, 1L, 100L, 4L)), 0L)));
+        assertTrue(client.waitFor(5, TimeUnit.SECONDS), "Client did not finish draining the accepted batch");
         String output = Files.readString(clientLog);
-        assertEquals(List.of(messages.getFirst(), messages.getFirst(), messages.getFirst()), messages,
-            "Send exactly three copies of the first request, then stop before submitting the next order");
         assertNotEquals(0, client.exitValue(), "An unanswered request must not look successful");
         assertTrue(output.contains("No reply after 3 attempts"), output);
         assertTrue(output.contains(first.requestId().toString()), output);
         assertTrue(output.contains("outcome unknown"), output);
-        assertFalse(output.contains("PlaceResult["), "Client printed a result it never received\n" + output);
+        assertFalse(output.contains("PlaceResult["),
+            "The first failed join should abort the result-printing loop\n" + output);
         assertTrue(errors.isEmpty(), errors::toString);
       } finally {
         if (client.isAlive()) {
@@ -213,6 +265,15 @@ class AeronEngineClientTest {
           client.waitFor(3, TimeUnit.SECONDS);
         }
       }
+    }
+  }
+
+  private static void awaitServerReady(Process server, Path log) throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (!Files.readString(log).contains("Server ready:")) {
+      assertTrue(server.isAlive(), "Server exited before becoming ready\n" + Files.readString(log));
+      assertTrue(System.nanoTime() - deadline < 0, "Timed out waiting for the server\n" + Files.readString(log));
+      Thread.sleep(10);
     }
   }
 
