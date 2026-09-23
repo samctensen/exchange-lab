@@ -18,6 +18,7 @@
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compiler.release>25</maven.compiler.release>
+    <sbe.version>1.40.1</sbe.version>
   </properties>
 
   <dependencyManagement>
@@ -53,6 +54,52 @@
 
   <build>
     <plugins>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.6.4</version>
+        <dependencies>
+          <dependency>
+            <groupId>uk.co.real-logic</groupId>
+            <artifactId>sbe-tool</artifactId>
+            <version>${sbe.version}</version>
+          </dependency>
+        </dependencies>
+        <executions>
+          <execution>
+            <!-- Let Zed/JDTLS register generated sources when importing the Maven project. -->
+            <?m2e execute onConfiguration?>
+            <id>generate-sbe-codecs</id>
+            <phase>generate-sources</phase>
+            <goals>
+              <goal>java</goal>
+            </goals>
+            <configuration>
+              <mainClass>uk.co.real_logic.sbe.SbeTool</mainClass>
+              <includePluginDependencies>true</includePluginDependencies>
+              <includeProjectDependencies>false</includeProjectDependencies>
+              <sourceRoot>${project.build.directory}/generated-sources/sbe</sourceRoot>
+              <arguments>
+                <argument>${project.basedir}/src/main/resources/sbe/orders.xml</argument>
+              </arguments>
+              <systemProperties>
+                <systemProperty>
+                  <key>sbe.output.dir</key>
+                  <value>${project.build.directory}/generated-sources/sbe</value>
+                </systemProperty>
+                <systemProperty>
+                  <key>sbe.target.language</key>
+                  <value>Java</value>
+                </systemProperty>
+                <systemProperty>
+                  <key>sbe.validation.stop.on.error</key>
+                  <value>true</value>
+                </systemProperty>
+              </systemProperties>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
       <plugin>
         <groupId>com.diffplug.spotless</groupId>
         <artifactId>spotless-maven-plugin</artifactId>

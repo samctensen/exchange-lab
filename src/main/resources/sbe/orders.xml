@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<sbe:messageSchema
+  xmlns:sbe="http://fixprotocol.io/2016/sbe"
+  package="dev.sam.exchange.protocol.sbe"
+  id="1"
+  version="0"
+  byteOrder="littleEndian"
+  description="Exchange Lab order messages"
+>
+  <types>
+    <!-- Every message starts with these four unsigned 16-bit values: 8 header bytes. -->
+    <composite
+      name="messageHeader"
+      description="Identifies the message layout and schema version"
+    >
+      <type name="blockLength" primitiveType="uint16" />
+      <type name="templateId" primitiveType="uint16" />
+      <type name="schemaId" primitiveType="uint16" />
+      <type name="version" primitiveType="uint16" />
+    </composite>
+    <!-- Explicit wire values are independent of the Java engine enum's ordinal. -->
+    <enum name="OrderSide" encodingType="uint8">
+      <validValue name="BID">1</validValue>
+      <validValue name="ASK">2</validValue>
+    </enum>
+    <type
+      name="OrderId"
+      primitiveType="int64"
+      minValue="-9223372036854775808"
+    />
+    <type name="PositiveLong" primitiveType="int64" minValue="1" />
+    <type
+      name="UuidBits"
+      primitiveType="int64"
+      minValue="-9223372036854775808"
+    />
+  </types>
+
+  <!-- Fixed fields occupy 25 bytes: 8 + 1 + 8 + 8. The header is separate. -->
+  <sbe:message name="PlaceOrder" id="1" description="Place a limit order">
+    <field name="orderId" id="1" type="OrderId" />
+    <field name="side" id="2" type="OrderSide" />
+    <field name="priceTicks" id="3" type="PositiveLong" />
+    <field name="quantityLots" id="4" type="PositiveLong" />
+  </sbe:message>
+  <sbe:message name="CancelOrder" id="2" description="Cancel a resting order">
+    <field name="orderId" id="1" type="OrderId" />
+  </sbe:message>
+  <sbe:message name="PlaceOrderRequest" id="3">
+    <field name="requestIdMostSignificantBits" id="1" type="UuidBits" />
+    <field name="requestIdLeastSignificantBits" id="2" type="UuidBits" />
+    <field name="orderId" id="3" type="OrderId" />
+    <field name="side" id="4" type="OrderSide" />
+    <field name="priceTicks" id="5" type="PositiveLong" />
+    <field name="quantityLots" id="6" type="PositiveLong" />
+  </sbe:message>
+  <sbe:message name="CancelOrderRequest" id="4">
+    <field name="requestIdMostSignificantBits" id="1" type="UuidBits" />
+    <field name="requestIdLeastSignificantBits" id="2" type="UuidBits" />
+    <field name="orderId" id="3" type="OrderId" />
+  </sbe:message>
+</sbe:messageSchema>
