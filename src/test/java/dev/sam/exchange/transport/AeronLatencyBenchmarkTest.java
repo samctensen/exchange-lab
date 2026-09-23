@@ -26,7 +26,6 @@ import org.junit.jupiter.params.provider.CsvSource;
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.PlaceOrder;
 import dev.sam.exchange.engine.Side;
-import dev.sam.exchange.persistence.RequestJournal;
 import io.aeron.Aeron;
 import io.aeron.Subscription;
 import io.aeron.driver.MediaDriver;
@@ -37,11 +36,11 @@ class AeronLatencyBenchmarkTest {
   @CsvSource({"0, 1", "5, 12"})
   void measuresFreshRequestsAfterWarmupAgainstAQuietServer(int warmup, int samples, @TempDir Path tempDir)
       throws Exception {
-    Path journal = tempDir.resolve("benchmark.journal");
+    Path archiveDirectory = tempDir.resolve("benchmark-archive");
     Path serverLog = tempDir.resolve("server.log");
     Path benchmarkLog = tempDir.resolve("benchmark.log");
     Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
-    Process server = startMain(tempDir, serverLog, AeronEngineServer.class, journal.toString(), "--quiet");
+    Process server = startMain(tempDir, serverLog, AeronEngineServer.class, archiveDirectory.toString(), "--quiet");
     Process benchmark = null;
     try {
       awaitOutput(server, serverLog, "Server ready:");
@@ -58,15 +57,16 @@ class AeronLatencyBenchmarkTest {
       double max = metric(report, "max");
       assertTrue(p50 > 0 && p50 <= p99 && p99 <= max, report);
 
-      List<CommandRequest> journaled = new RequestJournal(journal).readAll();
-      assertEquals(warmup + samples, journaled.size(), "Warmup must be sent but excluded from the reported samples");
-      assertEquals((long) journaled.size(), journaled.stream().map(CommandRequest::requestId).distinct().count(),
-          "Every request must use a new UUID so the benchmark cannot measure cached responses");
-      assertTrue(journaled.stream().allMatch(request -> request.command().equals(new CancelOrder(1L))));
       assertTrue(server.isAlive(), "The benchmark must leave the caller's server running");
 
       server.destroy();
       assertTrue(server.waitFor(3, TimeUnit.SECONDS), "Quiet server did not shut down");
+      List<CommandRequest> recorded = ArchiveTestSupport.readAll(archiveDirectory);
+      assertEquals(warmup + samples, recorded.size(), "Warmup must be sent but excluded from the reported samples");
+      assertEquals((long) recorded.size(), recorded.stream().map(CommandRequest::requestId).distinct().count(),
+          "Every request must use a new UUID so the benchmark cannot measure cached responses");
+      assertTrue(recorded.stream().allMatch(request -> request.command().equals(new CancelOrder(1L))));
+
       String output = Files.readString(serverLog);
       assertTrue(output.contains("Server ready:"), "Quiet mode must retain startup information");
       assertFalse(output.contains("Result:"), "Per-order result logging must be disabled in quiet mode\n" + output);
@@ -80,12 +80,12 @@ class AeronLatencyBenchmarkTest {
 
   @Test
   void rejectsAnUnexpectedResponseWithoutReportingStatistics(@TempDir Path tempDir) throws Exception {
-    Path journalPath = tempDir.resolve("benchmark.journal");
+    Path archiveDirectory = tempDir.resolve("benchmark-archive");
     Path serverLog = tempDir.resolve("server.log");
     Path benchmarkLog = tempDir.resolve("benchmark.log");
-    RequestJournal journal = new RequestJournal(journalPath);
-    journal.append(new CommandRequest(new UUID(0L, 1L), new PlaceOrder(1L, Side.BID, 100L, 10L)));
-    Process server = startMain(tempDir, serverLog, AeronEngineServer.class, "--quiet", journalPath.toString());
+    ArchiveTestSupport.record(archiveDirectory,
+        List.of(new CommandRequest(new UUID(0L, 1L), new PlaceOrder(1L, Side.BID, 100L, 10L))));
+    Process server = startMain(tempDir, serverLog, AeronEngineServer.class, "--quiet", archiveDirectory.toString());
     Process benchmark = null;
     try {
       awaitOutput(server, serverLog, "Server ready:");
@@ -96,10 +96,10 @@ class AeronLatencyBenchmarkTest {
       assertTrue(output.contains("Unexpected benchmark response"), output);
       assertTrue(output.contains("cancelled=true"), output);
       assertFalse(output.contains("p50:"), output);
-      assertEquals(2, journal.readAll().size(), "Stop after the first unexpected response");
       assertTrue(server.isAlive(), "A failed benchmark must not terminate its server");
       server.destroy();
       assertTrue(server.waitFor(3, TimeUnit.SECONDS), "Server did not shut down");
+      assertEquals(2, ArchiveTestSupport.readAll(archiveDirectory).size(), "Stop after the first unexpected response");
     } finally {
       stopIfAlive(benchmark);
       stopIfAlive(server);

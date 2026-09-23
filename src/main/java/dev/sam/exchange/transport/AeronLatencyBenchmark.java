@@ -28,7 +28,7 @@ public class AeronLatencyBenchmark {
       throw new IllegalArgumentException("Warmup count must be non-negative and sample count must be positive");
     }
 
-    // Use a separate server with a fresh journal and --quiet for a comparable baseline.
+    // Use a separate server with a fresh archive directory and --quiet for a comparable baseline.
     String aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
     long[] latencies = new long[sampleCount];
     try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectory));
@@ -53,7 +53,7 @@ public class AeronLatencyBenchmark {
   }
 
   private static long sendTimedRequest(AeronRequestClient client) {
-    // A new UUID exercises the journal and engine instead of the server's response cache.
+    // A new UUID exercises the recording path and engine instead of the server's response cache.
     // Request construction is outside the timer; the timer covers send() through its matching reply.
     CommandRequest request = new CommandRequest(UUID.randomUUID(), new CancelOrder(1L));
     long started = System.nanoTime();
@@ -62,7 +62,7 @@ public class AeronLatencyBenchmark {
 
     if (!EXPECTED_RESULT.equals(result)) {
       throw new IllegalStateException("Unexpected benchmark response for request " + request.requestId() + ": " + result
-          + "; use a fresh, empty benchmark journal");
+          + "; use a fresh, empty benchmark archive directory");
     }
     return elapsed;
   }

@@ -1,12 +1,14 @@
 package dev.sam.exchange.transport;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import org.agrona.ExpandableArrayBuffer;
 import org.agrona.concurrent.Agent;
+import org.agrona.concurrent.NanoClock;
+import org.agrona.concurrent.SystemNanoClock;
+import dev.sam.exchange.persistence.RequestLog;
 
 import io.aeron.FragmentAssembler;
 import io.aeron.Publication;
@@ -16,9 +18,15 @@ import io.aeron.logbuffer.FragmentHandler;
 public class AeronEngineAgent implements Agent {
   private final Subscription requests;
   private final Publication replies;
-  private final RequestProcessor processor;
+  private final RequestStateMachine processor;
+  private final RequestLog requestLog;
+  private final NanoClock clock;
   private final boolean logResults;
 
+  private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
+  private CommandRequest pendingRequest;
+  private long pendingLogPosition = -1;
+  private long logDeadlineNanos;
   private CommandResponse pendingResponse;
   private int pendingResponseLength;
   private long replyDeadlineNanos;
@@ -34,42 +42,81 @@ public class AeronEngineAgent implements Agent {
   private final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
   private final FragmentAssembler assembler = new FragmentAssembler(handler);
 
-  public AeronEngineAgent(Subscription requests, Publication replies, RequestProcessor processor) {
-    this(requests, replies, processor, true);
+  public AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor,
+      RequestLog requestLog) {
+    this(requests, replies, processor, requestLog, true);
   }
 
-  public AeronEngineAgent(Subscription requests, Publication replies, RequestProcessor processor, boolean logResults) {
+  public AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor,
+      RequestLog requestLog, boolean logResults) {
+    this(requests, replies, processor, requestLog, logResults, SystemNanoClock.INSTANCE);
+  }
+
+  AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor, RequestLog requestLog,
+      boolean logResults, NanoClock clock) {
     this.requests = requests;
     this.replies = replies;
     this.processor = processor;
+    this.requestLog = requestLog;
     this.logResults = logResults;
+    this.clock = clock;
   }
 
   @Override
-  public int doWork() throws IOException {
-    // Finish delivering the previous response before taking another request.
-    if (pendingResponse != null) {
+  public int doWork() {
+    // Finish delivery before admitting another request. AgentRunner owns idling between passes.
+    if (pendingResponse != null)
       return offerPendingReply();
+
+    int work = 0;
+    if (pendingRequest == null) {
+      work = requests.poll(assembler, 1);
+      // FragmentAssembler enqueues only complete requests.
+      if (receivedRequests.isEmpty())
+        return work;
+      pendingRequest = receivedRequests.removeFirst();
+      if (processor.hasProcessed(pendingRequest.requestId())) {
+        // The original request was already recorded. Retries and UUID conflicts need no new log entry.
+        prepareReply();
+        return work + 1 + offerPendingReply();
+      }
+      pendingLogPosition = -1;
+      logDeadlineNanos = clock.nanoTime() + TIMEOUT_NS;
     }
 
-    int fragments = requests.poll(assembler, 1);
-
-    // The assembler adds to receivedRequests only when a whole message is ready.
-    if (receivedRequests.isEmpty()) {
-      return fragments;
+    if (pendingLogPosition < 0) {
+      long position = requestLog.offer(pendingRequest);
+      if (position < 0) {
+        checkLogDeadline("offering request; last offer result: " + position);
+        return work;
+      }
+      pendingLogPosition = position;
+      // Once accepted, never offer this request again. Wait for this exact end position.
+      logDeadlineNanos = clock.nanoTime() + TIMEOUT_NS;
+      work++;
     }
 
-    CommandRequest request = receivedRequests.removeFirst();
-    pendingResponse = processor.process(request);
+    if (!requestLog.isRecorded(pendingLogPosition)) {
+      checkLogDeadline("request recording at position " + pendingLogPosition);
+      return work;
+    }
 
-    // Prepare once. Later calls retry these same bytes with this same deadline.
+    // Archive has written the request. Only now may it mutate the engine or produce a reply.
+    prepareReply();
+    return work + 1 + offerPendingReply();
+  }
+
+  private void prepareReply() {
+    pendingResponse = processor.process(pendingRequest);
+    pendingRequest = null;
     pendingResponseLength = buffer.putStringAscii(0, responseCodec.encode(pendingResponse));
-    replyDeadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    replyDeadlineNanos = clock.nanoTime() + TIMEOUT_NS;
+  }
 
-    int repliesSent = offerPendingReply();
-
-    // Count fragments read, one command processed, and any reply sent.
-    return fragments + 1 + repliesSent;
+  private void checkLogDeadline(String operation) {
+    if (clock.nanoTime() - logDeadlineNanos >= 0) {
+      throw new IllegalStateException("Timed out " + operation);
+    }
   }
 
   @Override
@@ -100,7 +147,7 @@ public class AeronEngineAgent implements Agent {
       throw new IllegalStateException("Publication reached its maximum position");
     }
 
-    if (System.nanoTime() - replyDeadlineNanos >= 0) {
+    if (clock.nanoTime() - replyDeadlineNanos >= 0) {
       throw new IllegalStateException("Timed out sending reply; last offer result: " + offerResult);
     }
 

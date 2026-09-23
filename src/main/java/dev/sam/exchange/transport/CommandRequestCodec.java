@@ -2,7 +2,7 @@ package dev.sam.exchange.transport;
 
 import java.util.UUID;
 
-import dev.sam.exchange.persistence.CommandCodec;
+import dev.sam.exchange.protocol.CommandCodec;
 
 public class CommandRequestCodec {
   private final CommandCodec commandCodec = new CommandCodec();

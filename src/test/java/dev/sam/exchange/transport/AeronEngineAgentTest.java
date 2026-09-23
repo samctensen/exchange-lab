@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTimeout;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -30,7 +29,8 @@ import dev.sam.exchange.engine.PlaceOrder;
 import dev.sam.exchange.engine.PlaceResult;
 import dev.sam.exchange.engine.Side;
 import dev.sam.exchange.engine.Trade;
-import dev.sam.exchange.persistence.RequestJournal;
+import dev.sam.exchange.persistence.RequestLog;
+import org.agrona.concurrent.NanoClock;
 import io.aeron.Aeron;
 import io.aeron.FragmentAssembler;
 import io.aeron.Publication;
@@ -57,7 +57,7 @@ class AeronEngineAgentTest {
         }
       });
       assertEquals(List.of(first), server.processor.processed);
-      assertEquals(List.of(first), server.journal.readAll());
+      assertEquals(List.of(first), server.log.accepted);
       assertEquals(List.of(new OrderSnapshot(bid, 10L)), server.book.snapshot());
 
       // Connecting later must release the original response, then let the queued request run.
@@ -69,7 +69,7 @@ class AeronEngineAgentTest {
             server.awaitResponses(responses, 2));
       }
       assertEquals(List.of(first, second), server.processor.processed);
-      assertEquals(List.of(first, second), server.journal.readAll());
+      assertEquals(List.of(first, second), server.log.accepted);
       assertEquals(List.of(new OrderSnapshot(bid, 6L)), server.book.snapshot());
       assertEquals(0, server.agent.doWork());
       assertFalse(server.requests.isClosed(), "The server still owns the borrowed subscription");
@@ -94,7 +94,7 @@ class AeronEngineAgentTest {
         int work = server.agent.doWork();
         if (work > 0 && server.processor.processed.isEmpty()) {
           partialPasses++;
-          assertEquals(List.of(), server.journal.readAll());
+          assertEquals(List.of(), server.log.accepted);
           assertEquals(List.of(), server.book.snapshot());
         }
         assertTrue(System.nanoTime() - deadline < 0, "The complete request was never processed");
@@ -103,7 +103,7 @@ class AeronEngineAgentTest {
 
       assertTrue(partialPasses > 0, "The fixture must span several polling passes");
       assertEquals(List.of(request), server.processor.processed);
-      assertEquals(List.of(request), server.journal.readAll());
+      assertEquals(List.of(request), server.log.accepted);
       assertTrue(server.errors.isEmpty(), server.errors::toString);
     }
   }
@@ -113,8 +113,9 @@ class AeronEngineAgentTest {
     try (TestServer server = new TestServer(tempDir)) {
       CommandRequest request = new CommandRequest(new UUID(0L, 1L), new CancelOrder(7L));
       server.send(request);
-      long started = System.nanoTime();
       server.awaitProcessed(1);
+      server.clock.advance(TimeUnit.SECONDS.toNanos(5));
+      long started = System.nanoTime();
       long testDeadline = started + TimeUnit.SECONDS.toNanos(7);
       SleepingIdleStrategy idle = new SleepingIdleStrategy();
 
@@ -127,10 +128,9 @@ class AeronEngineAgentTest {
       });
 
       assertTrue(failure.getMessage().contains("Timed out sending reply"), failure.getMessage());
-      assertTrue(System.nanoTime() - started >= TimeUnit.SECONDS.toNanos(5),
-          "The response must retain its full five-second send window");
+
       assertEquals(List.of(request), server.processor.processed);
-      assertEquals(List.of(request), server.journal.readAll());
+      assertEquals(List.of(request), server.log.accepted);
       assertTrue(server.errors.isEmpty(), server.errors::toString);
     }
   }
@@ -147,8 +147,140 @@ class AeronEngineAgentTest {
 
       assertEquals("Publication is closed", failure.getMessage());
       assertEquals(List.of(request), server.processor.processed);
-      assertEquals(List.of(request), server.journal.readAll());
+      assertEquals(List.of(request), server.log.accepted);
       assertTrue(server.errors.isEmpty(), server.errors::toString);
+    }
+  }
+
+  @Test
+  void waitsForRecordingBeforeApplyingOrReplyingAndDoesNotOfferTwice(@TempDir Path tempDir) throws Exception {
+    try (TestServer server = new TestServer(tempDir);
+        Subscription responses = server.aeron.addSubscription("aeron:ipc", 2)) {
+      awaitConnected(server.replies);
+      server.log.recordImmediately = false;
+      CommandRequest first = new CommandRequest(new UUID(0, 1), new PlaceOrder(1, Side.BID, 100, 10));
+      CommandRequest second = new CommandRequest(new UUID(0, 2), new CancelOrder(1));
+      server.send(first);
+      server.send(second);
+      server.awaitOffered();
+      for (int i = 0; i < 20; i++)
+        assertEquals(0, server.agent.doWork());
+      assertEquals(List.of(first), server.log.accepted);
+      assertEquals(1, server.log.offers);
+      assertEquals(List.of(), server.processor.processed);
+      assertEquals(List.of(), server.book.snapshot());
+      assertEquals(0, responses.poll((b, o, l, h) -> {
+        throw new AssertionError("Unrecorded request received a reply");
+      }, 10));
+
+      server.log.recordedPosition = 64;
+      assertEquals(List.of(new CommandResponse(first.requestId(), new PlaceResult(1, List.of(), 10))),
+          server.awaitResponses(responses, 1));
+      assertEquals(List.of(first), server.processor.processed);
+      assertEquals(1L, server.log.accepted.stream().filter(first::equals).count());
+    }
+  }
+
+  @Test
+  void logBackPressureRetainsRequestAndSuccessfulOfferHasItsOwnRecordingDeadline(@TempDir Path tempDir)
+      throws Exception {
+    try (TestServer server = new TestServer(tempDir)) {
+      server.log.backPressure = true;
+      server.log.recordImmediately = false;
+      CommandRequest request = new CommandRequest(new UUID(0, 1), new CancelOrder(1));
+      server.send(request);
+      server.awaitOffered();
+      assertEquals(List.of(), server.processor.processed);
+      assertEquals(List.of(), server.log.accepted);
+      server.clock.advance(TimeUnit.SECONDS.toNanos(4));
+      assertEquals(0, server.agent.doWork());
+      server.log.backPressure = false;
+      assertTrue(server.agent.doWork() > 0);
+      server.clock.advance(TimeUnit.SECONDS.toNanos(4));
+      assertEquals(0, server.agent.doWork());
+      server.log.recordedPosition = 64;
+      server.awaitProcessed(1);
+      assertEquals(List.of(request), server.log.accepted);
+    }
+  }
+
+  @Test
+  void recordingTimeoutOrFailureNeverAppliesRequest(@TempDir Path tempDir) throws Exception {
+    try (TestServer server = new TestServer(tempDir)) {
+      server.log.recordImmediately = false;
+      server.send(new CommandRequest(new UUID(0, 1), new PlaceOrder(1, Side.BID, 100, 10)));
+      server.awaitOffered();
+      server.clock.advance(TimeUnit.SECONDS.toNanos(5));
+      IllegalStateException failure = assertThrows(IllegalStateException.class, server.agent::doWork);
+      assertTrue(failure.getMessage().contains("recording"), failure.getMessage());
+      assertEquals(List.of(), server.book.snapshot());
+      assertEquals(List.of(), server.processor.processed);
+    }
+  }
+
+  @Test
+  void stoppedRecordingNeverAppliesPendingRequest(@TempDir Path tempDir) throws Exception {
+    try (TestServer server = new TestServer(tempDir)) {
+      server.log.recordImmediately = false;
+      server.send(new CommandRequest(new UUID(0, 1), new PlaceOrder(1, Side.BID, 100, 10)));
+      server.awaitOffered();
+      server.log.failure = new IllegalStateException("Recording failed");
+      assertEquals(server.log.failure, assertThrows(IllegalStateException.class, server.agent::doWork));
+      assertEquals(List.of(), server.book.snapshot());
+      assertEquals(List.of(), server.processor.processed);
+    }
+  }
+
+  @Test
+  void logOfferTimeoutKeepsItsOriginalDeadline(@TempDir Path tempDir) throws Exception {
+    try (TestServer server = new TestServer(tempDir)) {
+      server.log.backPressure = true;
+      server.send(new CommandRequest(new UUID(0, 1), new CancelOrder(1)));
+      server.awaitOffered();
+      server.clock.advance(TimeUnit.SECONDS.toNanos(4));
+      for (int i = 0; i < 10; i++)
+        assertEquals(0, server.agent.doWork());
+      server.clock.advance(TimeUnit.SECONDS.toNanos(1));
+      IllegalStateException failure = assertThrows(IllegalStateException.class, server.agent::doWork);
+      assertTrue(failure.getMessage().contains("offering request"), failure.getMessage());
+      assertEquals(List.of(), server.processor.processed);
+      assertEquals(List.of(), server.log.accepted);
+    }
+  }
+
+  private static final class TestClock implements NanoClock {
+    private long elapsed;
+    public long nanoTime() {
+      return elapsed;
+    }
+    void advance(long nanos) {
+      elapsed += nanos;
+    }
+  }
+
+  private static final class ControlledLog implements RequestLog {
+    private final List<CommandRequest> accepted = new ArrayList<>();
+    private int offers;
+    private boolean recordImmediately = true;
+    private boolean backPressure;
+    private long recordedPosition;
+    private RuntimeException failure;
+    public long offer(CommandRequest request) {
+      offers++;
+      if (failure != null)
+        throw failure;
+      if (backPressure)
+        return Publication.BACK_PRESSURED;
+      accepted.add(request);
+      long position = accepted.size() * 64L;
+      if (recordImmediately)
+        recordedPosition = position;
+      return position;
+    }
+    public boolean isRecorded(long position) {
+      if (failure != null)
+        throw failure;
+      return recordedPosition >= position;
     }
   }
 
@@ -161,16 +293,16 @@ class AeronEngineAgentTest {
     }
   }
 
-  // Keep the real journal and matching engine; record calls so deduplication cannot hide reprocessing.
-  private static final class RecordingProcessor extends RequestProcessor {
+  // Keep the real matching engine; record calls so deduplication cannot hide reprocessing.
+  private static final class RecordingProcessor extends RequestStateMachine {
     private final List<CommandRequest> processed = new ArrayList<>();
 
-    RecordingProcessor(OrderBook book, RequestJournal journal) {
-      super(new MatchingEngine(book), journal);
+    RecordingProcessor(OrderBook book) {
+      super(new MatchingEngine(book));
     }
 
     @Override
-    public CommandResponse process(CommandRequest request) throws IOException {
+    public CommandResponse process(CommandRequest request) {
       processed.add(request);
       return super.process(request);
     }
@@ -179,7 +311,8 @@ class AeronEngineAgentTest {
   private static final class TestServer implements AutoCloseable {
     private final ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
     private final OrderBook book = new OrderBook();
-    private final RequestJournal journal;
+    private final ControlledLog log = new ControlledLog();
+    private final TestClock clock = new TestClock();
     private final RecordingProcessor processor;
     private final MediaDriver driver;
     private final Aeron aeron;
@@ -189,8 +322,7 @@ class AeronEngineAgentTest {
     private final AeronEngineAgent agent;
 
     TestServer(Path tempDir) throws IOException {
-      journal = new RequestJournal(Files.createFile(tempDir.resolve("requests.journal")));
-      processor = new RecordingProcessor(book, journal);
+      processor = new RecordingProcessor(book);
       driver = MediaDriver
           .launchEmbedded(new MediaDriver.Context().aeronDirectoryName(tempDir.resolve("aeron").toString())
               .ipcMtuLength(256).dirDeleteOnShutdown(true).errorHandler(errors::add));
@@ -199,8 +331,17 @@ class AeronEngineAgentTest {
       requests = aeron.addSubscription("aeron:ipc", 1);
       replies = aeron.addPublication("aeron:ipc", 2);
       commands = aeron.addPublication("aeron:ipc", 1);
-      agent = new AeronEngineAgent(requests, replies, processor);
+      agent = new AeronEngineAgent(requests, replies, processor, log, false, clock);
       awaitConnected(commands);
+    }
+
+    void awaitOffered() throws IOException {
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+      while (log.offers == 0) {
+        agent.doWork();
+        assertTrue(System.nanoTime() - deadline < 0, "Request was never offered to the log");
+        Thread.onSpinWait();
+      }
     }
 
     void send(CommandRequest request) {

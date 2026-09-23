@@ -1,9 +1,6 @@
 package dev.sam.exchange.transport;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -12,12 +9,13 @@ import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.SleepingIdleStrategy;
 import org.agrona.concurrent.UnsafeBuffer;
 
-import dev.sam.exchange.JournaledEngine;
 import dev.sam.exchange.engine.CommandResult;
+import dev.sam.exchange.engine.MatchingEngine;
+import dev.sam.exchange.engine.OrderBook;
 import dev.sam.exchange.engine.EngineCommand;
 import dev.sam.exchange.engine.PlaceOrder;
 import dev.sam.exchange.engine.Side;
-import dev.sam.exchange.persistence.CommandCodec;
+import dev.sam.exchange.protocol.CommandCodec;
 import io.aeron.Aeron;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -27,22 +25,20 @@ import io.aeron.logbuffer.FragmentHandler;
 // Each order makes a round trip: Java object -> text -> Aeron bytes -> text -> Java object.
 // Sending and receiving happen on the main thread; Aeron also does work in background threads.
 public class AeronOrderDemo {
-  public static void main(String[] args) throws IOException {
+  public static void main(String[] args) {
 
-    Path journalPath = Files.createTempFile("exchange-aeron-", ".journal");
-    JournaledEngine engine = JournaledEngine.recover(journalPath);
+    MatchingEngine engine = new MatchingEngine(new OrderBook());
     List<EngineCommand> orders = List.of(new PlaceOrder(1L, Side.BID, 100L, 10L),
         new PlaceOrder(2L, Side.ASK, 99L, 4L));
 
     for (CommandResult result : run(orders, engine)) {
       System.out.println("Result: " + result);
     }
-    System.out.println("Journal: " + journalPath);
   }
 
   // Keep the transport flow shared by the runnable demo and its integration test.
-  // The caller supplies the engine, so it can inspect the resulting book and journal.
-  static List<CommandResult> run(List<EngineCommand> orders, JournaledEngine engine) throws IOException {
+  // The caller supplies the engine, so it can inspect the resulting book.
+  static List<CommandResult> run(List<EngineCommand> orders, MatchingEngine engine) {
     List<CommandResult> results = new ArrayList<>();
 
     // Start the transport driver inside this JVM. By default, it creates a uniquely named Aeron directory.
