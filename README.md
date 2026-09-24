@@ -22,7 +22,9 @@ The project currently uses plain Java 25, Maven, and JUnit 5:
 - A versioned protobuf contract, a separate Java gRPC gateway process, and a runnable gRPC client.
 - A server that stays available between client sessions and closes its resources on a shutdown request.
 
-This is a learning implementation. Best-price selection still scans the book, and the server processes commands on one thread.
+This is a learning implementation. The book indexes bid and ask price levels separately,
+preserves FIFO priority within each level, and supports direct lookup by order ID.
+The server processes commands on one thread.
 
 See [the current exchange architecture](docs/architecture.md#current-architecture) for the existing process boundaries.
 
@@ -119,6 +121,12 @@ The project configures it for Maven tests and Zed terminals. Include it in the l
 `AeronEngineServer.main` owns recovery, Archive/Aeron resources, and shutdown. An Agrona `AgentRunner` calls `AeronEngineAgent.doWork()` and handles idling on the dedicated `exchange-engine` thread. Each pass advances the pending request through recording and reply delivery without a blocking wait loop. An unsent reply keeps its encoded bytes and original deadline; the next request waits until that reply is queued. Main closes the runner before finishing the log and closing Archive/driver. Agent failures stop the worker and are rethrown by main after cleanup, preserving their original cause. Tests cover shutdown while idle or while a reply has no subscriber, recording failures, reply timeouts, and recovery after SIGKILL.
 
 The engine runner uses `BusySpinIdleStrategy`, following [Aeron’s guidance for low-latency subscribers](https://github.com/aeron-io/aeron/wiki/Best-Practices-Guide#application-threads). It keeps polling when idle and can consume roughly one CPU core. Budget a dedicated core for this approach in production; this demo leaves CPU placement to the operating system and does not reserve or pin a core. Stop the server with **⌃C** when finished.
+
+### Measure order-book performance
+
+The [standalone JMH benchmarks](benchmarks/README.md) measure place/cancel and
+fill/refill cycles at different resting book depths. They include repeatable workload
+tests, allocation profiling, and saved before/after measurements for the price-level order-book lesson.
 
 ### Measure IPC round-trip latency
 
