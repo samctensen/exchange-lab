@@ -18,11 +18,17 @@ The project currently uses plain Java 25, Maven, and JUnit 5:
 - Separate Aeron IPC client and server processes, with UUIDs connecting requests to replies.
 - Request deduplication across client reconnects, clean restarts, and abrupt process restarts.
 - Bounded client retries after reply timeouts, reusing the same UUID and command.
+- A bounded gateway queue that gives one worker ownership of the synchronous Aeron client.
+- A versioned protobuf contract, a separate Java gRPC gateway process, and a runnable gRPC client.
 - A server that stays available between client sessions and closes its resources on a shutdown request.
 
 This is a learning implementation. Best-price selection still scans the book, and the server processes commands on one thread.
 
-See [the architecture and backend integration diagrams](docs/architecture.md) for the current process boundaries and a proposed HTTP backend adapter.
+See [the current exchange architecture](docs/architecture.md#current-architecture) for the existing process boundaries.
+
+The selected backend integration is now Go → gRPC Java gateway → Aeron engine. See
+[the gRPC contract guide](docs/grpc-contract.md) for the schema, generated classes,
+error semantics, and local run instructions.
 
 ## How a request moves through the system
 
@@ -42,7 +48,7 @@ A duplicate order ID that is still on the book produces a `RejectResult` without
 
 The server remembers each completed request's UUID, command, and response. Retrying the same UUID and command returns the original response without another recording append or order-book mutation. Reusing a UUID with a different command returns `REQUEST_ID_CONFLICT` and preserves the original cached entry. Recording failures and timeouts stop the agent before applying the pending request or caching a response.
 
-After a reply timeout, the client resends the same request, up to three total attempts by default. A delayed matching reply completes the request; duplicate replies for an earlier order are ignored. If all attempts go unanswered, the client stops before sending the next order and reports the request UUID with an unknown outcome, since the server may already have processed it. A send failure on a later attempt also preserves the request UUID and unknown-outcome diagnostic.
+After a reply timeout, the client resends the same request, up to three total attempts by default. A delayed matching reply completes the request; duplicate replies for an earlier order are ignored. If all attempts go unanswered, that request fails with its UUID and an unknown outcome, since the server may already have processed it. The gateway still drains other accepted requests before a successful close returns. In the demo, both orders are queued before waiting for results, and an unknown outcome produces a nonzero process exit. A send failure on a later attempt also preserves the request UUID and unknown-outcome diagnostic.
 
 ### Ordering, recording, and recovery
 
@@ -72,6 +78,21 @@ mvn test             # Run the tests
 mvn verify           # Build, test, and check formatting
 mvn spotless:apply   # Format Java sources
 ```
+
+### Run the gRPC gateway in Zed
+
+1. Run `AeronEngineServer.main` and leave it running.
+2. Run `GrpcGatewayServer.main` and wait for `gRPC gateway listening on port 50051`.
+3. Run `GrpcGatewayClient.main`. It submits order 1001, a ten-lot bid at 100, and prints the protobuf response.
+4. Stop the gateway with **⌃C** before stopping the engine so accepted commands can finish.
+
+The gateway uses the same Aeron directory as the engine and a plaintext gRPC listener on port 50051.
+The demo client generates a new request UUID each run but uses a fixed order ID; rerunning it can
+produce a duplicate-order rejection. Retrying an uncertain request must reuse its original UUID
+and command. See [the gRPC guide](docs/grpc-contract.md) for status mapping and shutdown behavior.
+
+Zed's class play button supplies Maven's `exec.args` when launching Java. The SBE generation
+execution pins its own schema argument so those launch arguments do not replace the schema path.
 
 ### Run the IPC demo in Zed
 
@@ -191,6 +212,7 @@ Code lives under `src/main/java/dev/sam/exchange`:
 - `persistence`: `ArchiveRuntime`, `ArchiveRequestLog`, and the narrow `RequestLog` interface used by the agent.
 - `protocol`: the text command codec and SBE adapters, with generated message codecs in `protocol.sbe` under the build output directory.
 - `transport`: Aeron demos, reusable `AeronRequestClient`, request/response codecs, request deduplication, and request recovery.
+- `gateway`: bounded `EngineGateway`, protobuf/domain mapping, the gRPC service, and server/client entry points. The shared contract is under `src/main/proto/exchange/v1`.
 
 `AeronEngineClient.main` creates and closes the Aeron connections, assigns request UUIDs, and prints results. `AeronRequestClient` borrows the publication and subscription and handles encoding, retries, and correlated replies. Use each client instance from one thread, with one request at a time.
 

@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package exchange.v1;
+
+option java_multiple_files = true;
+option java_outer_classname = "ExchangeProtocol";
+option java_package = "dev.sam.exchange.gateway.proto";
+
+// One command produces one result. The Java adapter will call EngineGateway.submit.
+service ExchangeService {
+  rpc Submit(SubmitRequest) returns (SubmitResponse);
+}
+
+message SubmitRequest {
+  // UUID text. Retries must keep the same UUID and command, including after a timeout.
+  string request_id = 1;
+
+  // A oneof permits at most one command; the adapter must reject an unset command.
+  oneof command {
+    PlaceOrder place = 2;
+    CancelOrder cancel = 3;
+  }
+}
+
+message PlaceOrder {
+  // Signed int64 preserves the engine's Java long values without decimal conversion.
+  int64 order_id = 1;
+  Side side = 2;
+  int64 price_ticks = 3;
+  int64 quantity_lots = 4;
+}
+
+message CancelOrder {
+  int64 order_id = 1;
+}
+
+enum Side {
+  // Proto3 enums default to zero. The adapter must reject this value and unknown values.
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BID = 1;
+  SIDE_ASK = 2;
+}
+
+message SubmitResponse {
+  string request_id = 1;
+
+  // Business rejections are results; malformed requests and transport failures use gRPC status.
+  oneof result {
+    PlaceResult place = 2;
+    CancelResult cancel = 3;
+    RejectResult reject = 4;
+  }
+}
+
+message PlaceResult {
+  int64 order_id = 1;
+  int64 remaining_lots = 2;
+  repeated Trade trades = 3;
+}
+
+message CancelResult {
+  int64 order_id = 1;
+  bool cancelled = 2;
+}
+
+message RejectResult {
+  int64 order_id = 1;
+  RejectReason reason = 2;
+}
+
+enum RejectReason {
+  REJECT_REASON_UNSPECIFIED = 0;
+  REJECT_REASON_DUPLICATE_ORDER_ID = 1;
+  REJECT_REASON_REQUEST_ID_CONFLICT = 2;
+}
+
+message Trade {
+  int64 incoming_order_id = 1;
+  int64 resting_order_id = 2;
+  int64 price_ticks = 3;
+  int64 quantity_lots = 4;
+}
