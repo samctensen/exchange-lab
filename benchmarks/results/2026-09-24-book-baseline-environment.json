@@ -1,0 +1,16 @@
+{
+  "engine_commit": "f0b8c48569fbe8f23082dbd3d41ac700b2807bca",
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83",
+  "hardware": "Apple M4 Pro",
+  "logical_cpus": "14",
+  "memory_bytes": "25769803776",
+  "java": "openjdk version \"25.0.4.1\" 2026-08-18\nOpenJDK Runtime Environment Homebrew (build 25.0.4.1)\nOpenJDK 64-Bit Server VM Homebrew (build 25.0.4.1, mixed mode, sharing)",
+  "uptime_before": "14:16  up 15 days,  4:32, 2 users, load averages: 2.99 3.66 2.83",
+  "java_tool_options": "",
+  "jdk_java_options": "",
+  "running_exchange_processes": "",
+  "uptime_after": "14:20  up 15 days,  4:36, 2 users, load averages: 3.50 3.67 3.04",
+  "benchmark_source_sha256": "ff00266037f04e663a25d45a7b53ec2fb97f46363c22bfeded227befde82d46c",
+  "engine_jar_sha256": "b7dc6a2fee51fdd09d152c214fdc329a32ab27ad42ef64d2b1fa3e14ca1f68fd",
+  "command": "java -jar benchmarks/target/benchmarks.jar OrderBookBenchmark -prof gc -foe true -rf json -rff benchmarks/results/2026-09-24-book-baseline.json"
+}
