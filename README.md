@@ -36,14 +36,14 @@ error semantics, and local run instructions.
 
 ```text
 Client: CommandRequest(UUID, EngineCommand)
-  -> Aeron IPC stream 1
-  -> Server agent: check the UUID cache
+  -> SBE encode -> Aeron IPC stream 1
+  -> Server agent: SBE decode, then check the UUID cache
   -> New UUID: SBE encode -> server-owned IPC stream 2001 -> Archive
   -> Wait for Archive recording position >= offered request end position
   -> RequestStateMachine: validate, match/cancel, and cache the result
   -> CommandResponse(same UUID, CommandResult)
-  -> Aeron IPC stream 2
-  -> Client: accept the reply whose UUID matches its current request
+  -> SBE encode -> Aeron IPC stream 2
+  -> Client: SBE decode, then accept the reply whose UUID matches its current request
 ```
 
 A duplicate order ID that is still on the book produces a `RejectResult` without changing the book. First-time requests are recorded even when rejected, so replay can reconstruct the same response. Cancelling a missing order returns `CancelResult` with `cancelled=false`.
@@ -116,7 +116,7 @@ Both processes must use the same `java.io.tmpdir`, where the server creates `exc
 --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED
 ```
 
-The project configures it for Maven tests and Zed terminals. Include it in the launch configuration when running elsewhere. Use matching client/server versions: the IPC protocol now expects `REQUEST,<uuid>,<command>` and `RESPONSE,<uuid>,<result>` wrappers.
+The project configures it for Maven tests and Zed terminals. Include it in the launch configuration when running elsewhere. Use matching client/server versions: IPC stream 1 carries SBE `PlaceOrderRequest` and `CancelOrderRequest` messages; stream 2 carries SBE `PlaceOrderResponse`, `CancelOrderResponse`, and `RejectOrderResponse` messages. Both live streams use the binary protocol instead of the old text wrappers.
 
 `AeronEngineServer.main` owns recovery, Archive/Aeron resources, and shutdown. An Agrona `AgentRunner` calls `AeronEngineAgent.doWork()` and handles idling on the dedicated `exchange-engine` thread. Each pass advances the pending request through recording and reply delivery without a blocking wait loop. An unsent reply keeps its encoded bytes and original deadline; the next request waits until that reply is queued. Main closes the runner before finishing the log and closing Archive/driver. Agent failures stop the worker and are rethrown by main after cleanup, preserving their original cause. Tests cover shutdown while idle or while a reply has no subscriber, recording failures, reply timeouts, and recovery after SIGKILL.
 
@@ -141,7 +141,7 @@ The report gives p50, p99, and maximum latency in microseconds (`us`). Percentil
 
 This is a baseline with one request outstanding at a time. It includes codecs, IPC transport, the server's missing-order cancellation path, Archive recording/forced writes, and idle-strategy delays. It does not exercise matching trades or measure maximum throughput. The live server now forces Archive writes, so measurements are not directly comparable to the old buffered-journal baseline. Repeat runs with fresh Archive directories before drawing conclusions; 2,000 samples give only a small view of tail latency.
 
-### Encode commands and requests with Simple Binary Encoding (SBE)
+### Encode commands, requests, and responses with Simple Binary Encoding (SBE)
 
 Run `mvn generate-sources` once, then run `SbeOrderDemo.main` in Zed using the existing `--add-opens` JVM option. It prints the original order, message header, binary bytes in hex, and the decoded order. The final line should be `Equal: true`. This example runs entirely in memory.
 
@@ -150,7 +150,8 @@ Start with these files:
 1. `src/main/resources/sbe/orders.xml`: the message schema, defining field types, field order, explicit BID/ASK values, and the header.
 2. `src/main/java/dev/sam/exchange/protocol/SbeCommandCodec.java`: adapts `PlaceOrder` and `CancelOrder` to generated buffer encoders/decoders.
 3. `src/main/java/dev/sam/exchange/protocol/SbeRequestCodec.java`: encodes and decodes `CommandRequest`, preserving its UUID and command.
-4. `src/main/java/dev/sam/exchange/transport/SbeOrderDemo.java`: the runnable walkthrough.
+4. `src/main/java/dev/sam/exchange/protocol/SbeResponseCodec.java`: encodes and decodes placement, cancellation, and rejection responses, including each placement's trades.
+5. `src/main/java/dev/sam/exchange/transport/SbeOrderDemo.java`: the runnable walkthrough.
 
 Maven generates Java codecs under `target/generated-sources/sbe` during `generate-sources`, before compilation and tests. Edit the XML schema and regenerate; generated Java files stay out of Git. The generation execution includes an m2e configuration hint so Zed's Java importer registers that source directory. SBE's generator is a build-plugin dependency, so it does not add a generator dependency to the application's runtime. It is pinned to 1.40.1, which uses our existing Agrona 2.6.0 version.
 
@@ -162,19 +163,24 @@ Every message starts with an 8-byte header. Numbers use little-endian byte order
 | `CancelOrder` | 2 | 8 | 16 |
 | `PlaceOrderRequest` | 3 | 41 | 49 |
 | `CancelOrderRequest` | 4 | 24 | 32 |
+| `PlaceOrderResponse` | 5 | 36 + 32 × trade count | 44 + 32 × trade count |
+| `CancelOrderResponse` | 6 | 25 | 33 |
+| `RejectOrderResponse` | 7 | 25 | 33 |
 
 A place command contains an 8-byte order ID, 1-byte side, 8-byte price, and 8-byte quantity. A cancellation contains only the order ID. Request messages prepend the UUID's most-significant and least-significant 64-bit halves to those command fields, adding 16 bytes. Decoding reconstructs the original UUID so later request processing can recognize retries.
 
+A placement response contains 32 bytes of fixed fields (UUID, order ID, and remaining lots), followed by a 4-byte trade-group header and 32 bytes per trade. Even an empty trade list includes the group header. Cancellation and rejection responses contain the UUID, order ID, and a 1-byte cancellation flag or rejection reason.
+
 | Header field | Meaning in this schema |
 | --- | --- |
-| `blockLength` | Fixed body size for the selected template, excluding the header. |
-| `templateId` | Identifies one of the four message layouts above. |
+| `blockLength` | Size of the fixed fields for the selected template, excluding the message header and repeating groups. |
+| `templateId` | Identifies one of the message layouts above. |
 | `schemaId` | Schema identifier: 1 means our exchange schema. |
 | `version` | Schema version: currently 0. |
 
-Each adapter reuses its generated encoders and decoders; use each adapter on one thread. Generated codecs wrap the caller's buffer, while decoding creates domain records with independent values. The adapters validate the supplied frame bounds, schema, version, template-specific body size, and side. `PlaceOrder` retains price/quantity validation. They accept only the exact version-zero layouts; schema evolution will need an explicit compatibility policy.
+Each adapter reuses its generated encoders and decoders; use each adapter on one thread. Generated codecs wrap the caller's buffer, while decoding creates domain records with independent values. The adapters validate the supplied frame bounds, schema, version, template-specific body size, and enum values. The response decoder also checks the trade-group layout and count, nonnegative remaining lots, and positive trade prices and quantities. `PlaceOrder` retains price/quantity validation. The adapters accept only the exact version-zero layouts; schema evolution will need an explicit compatibility policy.
 
-Tests cover independent binary fixtures, both sides, full-width long and UUID values, nonzero offsets, decoder reuse across buffers, and malformed messages. The live IPC client/server wire protocol still uses text request/response codecs; the server-owned persistent request log uses `SbeRequestCodec`.
+Tests cover independent binary fixtures, both sides, full-width long and UUID values, nonzero offsets, decoder reuse across buffers, and malformed messages. Live IPC requests and the server-owned persistent request log use `SbeRequestCodec`; live responses use `SbeResponseCodec`. Transport tests preserve byte-identical retries, force request fragmentation with a small test-only MTU, and verify reassembly of replies containing many trades. Malformed replies cannot complete a pending request.
 
 Reference: [SBE Java users guide](https://github.com/aeron-io/simple-binary-encoding/wiki/Java-Users-Guide).
 
