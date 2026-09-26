@@ -1,0 +1,11 @@
+{
+  "overrides": [
+    {
+      "files": "**/*.xml",
+      "options": {
+        "xmlWhitespaceSensitivity": "ignore",
+        "tabWidth": 2
+      }
+    }
+  ]
+}
