@@ -1,5 +1,6 @@
 package dev.sam.exchange.transport;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -16,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.agrona.ExpandableArrayBuffer;
 import org.agrona.concurrent.SleepingIdleStrategy;
+import org.agrona.concurrent.UnsafeBuffer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -27,6 +29,8 @@ import dev.sam.exchange.engine.PlaceOrder;
 import dev.sam.exchange.engine.PlaceResult;
 import dev.sam.exchange.engine.Side;
 import dev.sam.exchange.engine.Trade;
+import dev.sam.exchange.protocol.SbeRequestCodec;
+import dev.sam.exchange.protocol.SbeResponseCodec;
 import io.aeron.Aeron;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -102,16 +106,14 @@ class AeronEngineClientTest {
       Process client = startClient(tempDir, clientLog);
 
       try {
-        List<String> messages = new ArrayList<>();
-        FragmentHandler handler = (buffer, offset, length, header) -> messages.add(buffer.getStringAscii(offset));
-        CommandRequestCodec requestCodec = new CommandRequestCodec();
+        List<byte[]> messages = new ArrayList<>();
+        FragmentHandler handler = captureRequests(messages);
 
         awaitCommandCount(commands, handler, messages, 1, client, clientLog);
-        assertTrue(messages.getFirst().startsWith("REQUEST,"), "Client must send a request wrapper");
-        CommandRequest first = requestCodec.decode(messages.getFirst());
+        CommandRequest first = decodeRequest(messages.getFirst());
         assertEquals(new PlaceOrder(1L, Side.BID, 100L, 10L), first.command());
 
-        // Ten one-lot fills with long resting IDs exceed this publication's single-fragment payload.
+        // Ten 32-byte trade entries plus the 44-byte prefix exceed this publication's single-fragment payload.
         List<Trade> firstTrades = new ArrayList<>();
         if (fragmentedReplies) {
           for (int i = 0; i < 10; i++) {
@@ -132,7 +134,7 @@ class AeronEngineClientTest {
 
         sendResponse(replies, new CommandResponse(first.requestId(), firstResult));
         awaitCommandCount(commands, handler, messages, 2, client, clientLog);
-        CommandRequest second = requestCodec.decode(messages.get(1));
+        CommandRequest second = decodeRequest(messages.get(1));
         assertEquals(new PlaceOrder(2L, Side.ASK, 99L, 4L), second.command());
         assertNotEquals(first.requestId(), second.requestId(), "Each command needs its own request ID");
 
@@ -175,21 +177,20 @@ class AeronEngineClientTest {
         Publication replies = aeron.addPublication("aeron:ipc", 2)) {
       Process client = startClient(tempDir, clientLog);
       try {
-        List<String> messages = new ArrayList<>();
-        FragmentHandler handler = (buffer, offset, length, header) -> messages.add(buffer.getStringAscii(offset));
-        CommandRequestCodec codec = new CommandRequestCodec();
+        List<byte[]> messages = new ArrayList<>();
+        FragmentHandler handler = captureRequests(messages);
         awaitCommandCount(commands, handler, messages, 1, client, clientLog);
-        CommandRequest first = codec.decode(messages.getFirst());
+        CommandRequest first = decodeRequest(messages.getFirst());
         assertEquals(new PlaceOrder(1L, Side.BID, 100L, 10L), first.command());
 
         // Wait briefly to catch immediate resends, then withhold the reply until the timeout.
         assertStillWaiting(commands, handler, messages, 1, client, clientLog);
         awaitCommandCount(commands, handler, messages, 2, client, clientLog, 8);
-        assertEquals(messages.getFirst(), messages.get(1), "A retry must preserve the UUID and command bytes");
+        assertArrayEquals(messages.getFirst(), messages.get(1), "A retry must preserve the UUID and command bytes");
         CommandResponse delayed = new CommandResponse(first.requestId(), new PlaceResult(1L, List.of(), 10L));
         sendResponse(replies, delayed);
         awaitCommandCount(commands, handler, messages, 3, client, clientLog);
-        CommandRequest next = codec.decode(messages.get(2));
+        CommandRequest next = decodeRequest(messages.get(2));
         assertEquals(new PlaceOrder(2L, Side.ASK, 99L, 4L), next.command());
         assertNotEquals(first.requestId(), next.requestId(), "The next logical order needs a fresh UUID");
 
@@ -231,18 +232,19 @@ class AeronEngineClientTest {
         Publication replies = aeron.addPublication("aeron:ipc", 2)) {
       Process client = startClient(tempDir, clientLog);
       try {
-        List<String> messages = new ArrayList<>();
-        FragmentHandler handler = (buffer, offset, length, header) -> messages.add(buffer.getStringAscii(offset));
+        List<byte[]> messages = new ArrayList<>();
+        FragmentHandler handler = captureRequests(messages);
         awaitCommandCount(commands, handler, messages, 1, client, clientLog);
-        CommandRequest first = new CommandRequestCodec().decode(messages.getFirst());
+        CommandRequest first = decodeRequest(messages.getFirst());
         assertEquals(new PlaceOrder(1L, Side.BID, 100L, 10L), first.command());
 
         // Withhold all replies to the first request. After its three attempts, graceful close must
         // drain the second request, which the demo already accepted into the gateway's queue.
         awaitCommandCount(commands, handler, messages, 4, client, clientLog, 18);
-        assertEquals(List.of(messages.getFirst(), messages.getFirst(), messages.getFirst()), messages.subList(0, 3),
-            "Retry the first request exactly three times with unchanged bytes");
-        CommandRequest second = new CommandRequestCodec().decode(messages.get(3));
+        for (int attempt = 1; attempt < 3; attempt++) {
+          assertArrayEquals(messages.getFirst(), messages.get(attempt), "Retries must preserve the original bytes");
+        }
+        CommandRequest second = decodeRequest(messages.get(3));
         assertEquals(new PlaceOrder(2L, Side.ASK, 99L, 4L), second.command());
         assertNotEquals(first.requestId(), second.requestId());
 
@@ -284,12 +286,24 @@ class AeronEngineClientTest {
         AeronEngineClient.class.getName()).redirectErrorStream(true).redirectOutput(clientLog.toFile()).start();
   }
 
-  private static void awaitCommandCount(Subscription commands, FragmentHandler handler, List<String> messages,
+  private static FragmentHandler captureRequests(List<byte[]> messages) {
+    return (buffer, offset, length, header) -> {
+      byte[] message = new byte[length];
+      buffer.getBytes(offset, message);
+      messages.add(message);
+    };
+  }
+
+  private static CommandRequest decodeRequest(byte[] message) {
+    return new SbeRequestCodec().decode(new UnsafeBuffer(message), 0, message.length);
+  }
+
+  private static void awaitCommandCount(Subscription commands, FragmentHandler handler, List<byte[]> messages,
       int expected, Process client, Path clientLog) throws Exception {
     awaitCommandCount(commands, handler, messages, expected, client, clientLog, 5);
   }
 
-  private static void awaitCommandCount(Subscription commands, FragmentHandler handler, List<String> messages,
+  private static void awaitCommandCount(Subscription commands, FragmentHandler handler, List<byte[]> messages,
       int expected, Process client, Path clientLog, long timeoutSeconds) throws Exception {
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
     SleepingIdleStrategy idle = new SleepingIdleStrategy();
@@ -302,7 +316,7 @@ class AeronEngineClientTest {
     assertEquals(expected, messages.size());
   }
 
-  private static void assertStillWaiting(Subscription commands, FragmentHandler handler, List<String> messages,
+  private static void assertStillWaiting(Subscription commands, FragmentHandler handler, List<byte[]> messages,
       int expected, Process client, Path clientLog) throws Exception {
     long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500);
     SleepingIdleStrategy idle = new SleepingIdleStrategy();
@@ -317,7 +331,7 @@ class AeronEngineClientTest {
 
   private static int sendResponse(Publication replies, CommandResponse response) {
     ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
-    int length = buffer.putStringAscii(0, new CommandResponseCodec().encode(response));
+    int length = new SbeResponseCodec().encode(response, buffer, 0);
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
     SleepingIdleStrategy idle = new SleepingIdleStrategy();
     while (replies.offer(buffer, 0, length) < 0) {

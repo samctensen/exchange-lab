@@ -23,15 +23,15 @@ flowchart TB
     State -->|"CommandResponse"| Agent
     Archive -.->|"startup replay / stream 2002"| State
   end
-  Client -->|"text request / IPC stream 1"| Agent
-  Agent -->|"text response / IPC stream 2"| Client
+  Client -->|"SBE request / IPC stream 1"| Agent
+  Agent -->|"SBE response / IPC stream 2"| Client
 ```
 
 The arrows between client and agent are transported through the server-owned Media Driver's shared-memory buffers. The Archive recording is persistent storage; driver buffers are disposable. There is no HTTP API or external backend yet.
 
 ### The important boundaries
 
-- **Transport:** `AeronRequestClient` sends UUID-wrapped commands and waits for the matching response. Both wire directions currently use text codecs. The persistent request log uses SBE.
+- **Transport:** `AeronRequestClient` sends UUID-wrapped SBE requests and waits for the matching SBE response. Fragment assemblers deliver complete messages to the decoders. The persistent request log also uses SBE. Client and server must agree on both binary formats.
 - **Ordering:** the engine agent chooses one processing order across incoming client sessions. Its single `ExclusivePublication` records that order. Separate client sessions have no shared ordering guarantee by themselves. [Aeron ordering documentation](https://aeron.io/docs/aeron/aeron-channel-stream-session/)
 - **Persistence:** a successful publication offer only places bytes in Aeron's buffer. The agent waits across `doWork()` passes until Archive's recording position reaches that message's end position. File/catalog sync level 2 forces data and metadata before the engine proceeds.
 - **Execution:** `RequestStateMachine` handles retries and UUID conflicts, then delegates fresh commands to `MatchingEngine`. It caches successful results and business rejections. `OrderBook` holds the authoritative live order state.

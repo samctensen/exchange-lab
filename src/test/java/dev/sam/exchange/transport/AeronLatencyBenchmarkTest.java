@@ -26,6 +26,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.PlaceOrder;
 import dev.sam.exchange.engine.Side;
+import dev.sam.exchange.protocol.SbeRequestCodec;
 import io.aeron.Aeron;
 import io.aeron.Subscription;
 import io.aeron.driver.MediaDriver;
@@ -119,13 +120,13 @@ class AeronLatencyBenchmarkTest {
         Subscription commands = aeron.addSubscription("aeron:ipc", 1)) {
       Process benchmark = startMain(tempDir, log, AeronLatencyBenchmark.class, "0", "2");
       List<CommandRequest> received = new ArrayList<>();
-      CommandRequestCodec codec = new CommandRequestCodec();
+      SbeRequestCodec codec = new SbeRequestCodec();
       SleepingIdleStrategy idle = new SleepingIdleStrategy();
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
       try {
         while (benchmark.isAlive()) {
           int fragments = commands
-              .poll((buffer, offset, length, header) -> received.add(codec.decode(buffer.getStringAscii(offset))), 10);
+              .poll((buffer, offset, length, header) -> received.add(codec.decode(buffer, offset, length)), 10);
           assertTrue(System.nanoTime() - deadline < 0, "Benchmark kept retrying an unanswered request");
           idle.idle(fragments);
         }

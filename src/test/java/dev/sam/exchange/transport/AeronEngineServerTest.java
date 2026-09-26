@@ -31,6 +31,8 @@ import dev.sam.exchange.engine.RejectReason;
 import dev.sam.exchange.engine.RejectResult;
 import dev.sam.exchange.engine.Side;
 import dev.sam.exchange.engine.Trade;
+import dev.sam.exchange.protocol.SbeRequestCodec;
+import dev.sam.exchange.protocol.SbeResponseCodec;
 import io.aeron.archive.client.AeronArchive;
 import io.aeron.Aeron;
 import io.aeron.FragmentAssembler;
@@ -94,9 +96,11 @@ class AeronEngineServerTest {
 
     ArchiveTestSupport.record(archiveDirectory, initialRequests);
     PlaceResult expected = new PlaceResult(1000L, expectedTrades, 0L);
-    String encoded = new CommandResponseCodec().encode(new CommandResponse(UUID.randomUUID(), expected));
-    assertTrue(encoded.length() > 256, "The reply must exceed the old server buffer");
-    assertTrue(encoded.length() > IPC_MTU_LENGTH, "The reply must require multiple fragments");
+    int encodedLength = new SbeResponseCodec().encode(new CommandResponse(UUID.randomUUID(), expected),
+        new ExpandableArrayBuffer(256), 0);
+    assertEquals(3244, encodedLength, "The reply contains a 44-byte prefix and 100 32-byte trades");
+    assertTrue(encodedLength > 256, "The reply must exceed the initial server buffer");
+    assertTrue(encodedLength > IPC_MTU_LENGTH, "The reply must require multiple fragments");
 
     // A single bid sweeps all 100 resting asks; the UUID-filtering test peer reassembles its reply.
     List<CommandResult> results = runServerSession(tempDir, archiveDirectory,
@@ -232,7 +236,7 @@ class AeronEngineServerTest {
           Publication commands = aeron.addPublication("aeron:ipc", 1)) {
         // Publish a request without ever creating a reply subscription.
         ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
-        int length = buffer.putStringAscii(0, new CommandRequestCodec().encode(request));
+        int length = new SbeRequestCodec().encode(request, buffer, 0);
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         SleepingIdleStrategy idle = new SleepingIdleStrategy();
         while (commands.offer(buffer, 0, length) < 0) {
@@ -292,7 +296,7 @@ class AeronEngineServerTest {
               .connect(new Aeron.Context().aeronDirectoryName(driverDirectory.toString()).errorHandler(errors::add));
           Publication commands = aeron.addPublication("aeron:ipc", 1)) {
         ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
-        int length = buffer.putStringAscii(0, new CommandRequestCodec().encode(request));
+        int length = new SbeRequestCodec().encode(request, buffer, 0);
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         SleepingIdleStrategy idle = new SleepingIdleStrategy();
         while (commands.offer(buffer, 0, length) < 0) {
@@ -391,9 +395,10 @@ class AeronEngineServerTest {
     Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
     String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
     Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-        "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Daeron.ipc.mtu.length=" + IPC_MTU_LENGTH,
-        "-Djava.io.tmpdir=" + tempDir, "-cp", classpath, AeronEngineServer.class.getName(), archiveDirectory.toString())
-        .redirectErrorStream(true).redirectOutput(serverLog.toFile()).start();
+        "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED",
+        "-Daeron.ipc.mtu.length=" + (fragmentRequests ? 64 : IPC_MTU_LENGTH), "-Djava.io.tmpdir=" + tempDir, "-cp",
+        classpath, AeronEngineServer.class.getName(), archiveDirectory.toString()).redirectErrorStream(true)
+        .redirectOutput(serverLog.toFile()).start();
 
     try {
       awaitServerOutput(server, serverLog, "Server ready:");
@@ -433,24 +438,19 @@ class AeronEngineServerTest {
             .connect(new Aeron.Context().aeronDirectoryName(driverDirectory.toString()).errorHandler(errors::add));
         Publication commands = aeron.addPublication("aeron:ipc", 1);
         Subscription replies = aeron.addSubscription("aeron:ipc", 2)) {
-      CommandRequestCodec requestCodec = new CommandRequestCodec();
-      CommandResponseCodec responseCodec = new CommandResponseCodec();
+      SbeRequestCodec requestCodec = new SbeRequestCodec();
+      SbeResponseCodec responseCodec = new SbeResponseCodec();
       SleepingIdleStrategy idle = new SleepingIdleStrategy();
       ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
       List<CommandResponse> responses = new ArrayList<>();
-      FragmentAssembler assembler = new FragmentAssembler((replyBuffer, offset, length, header) -> responses
-          .add(responseCodec.decode(replyBuffer.getStringAscii(offset))));
+      FragmentAssembler assembler = new FragmentAssembler(
+          (replyBuffer, offset, length, header) -> responses.add(responseCodec.decode(replyBuffer, offset, length)));
 
       for (int i = 0; i < requests.size(); i++) {
         CommandRequest request = requests.get(i);
-        String encoded = requestCodec.encode(request);
+        int length = requestCodec.encode(request, buffer, 0);
         if (fragmentRequests) {
-          // Leading zeroes keep a valid order ID while making the wire request span fragments.
-          encoded = encoded.replace(",PLACE,", ",PLACE," + "0".repeat(commands.maxPayloadLength()));
-          assertEquals(request, requestCodec.decode(encoded), "Padding must preserve the original command");
-        }
-        int length = buffer.putStringAscii(0, encoded);
-        if (fragmentRequests) {
+          // A 64-byte MTU leaves a 32-byte payload, so the valid 49-byte place request fragments.
           assertTrue(length > commands.maxPayloadLength(), "The test must send a fragmented request");
           assertTrue(length <= commands.maxMessageLength(), "The fixture must fit within Aeron's message limit");
         }

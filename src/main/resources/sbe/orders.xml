@@ -34,6 +34,19 @@
       primitiveType="int64"
       minValue="-9223372036854775808"
     />
+    <enum name="BooleanFlag" encodingType="uint8">
+      <validValue name="FALSE">0</validValue>
+      <validValue name="TRUE">1</validValue>
+    </enum>
+    <enum name="RejectionReason" encodingType="uint8">
+      <validValue name="DUPLICATE_ORDER_ID">1</validValue>
+      <validValue name="REQUEST_ID_CONFLICT">2</validValue>
+    </enum>
+    <type name="NonNegativeLong" primitiveType="int64" minValue="0" />
+    <composite name="groupSizeEncoding">
+      <type name="blockLength" primitiveType="uint16" />
+      <type name="numInGroup" primitiveType="uint16" />
+    </composite>
   </types>
 
   <!-- Fixed fields occupy 25 bytes: 8 + 1 + 8 + 8. The header is separate. -->
@@ -58,5 +71,29 @@
     <field name="requestIdMostSignificantBits" id="1" type="UuidBits" />
     <field name="requestIdLeastSignificantBits" id="2" type="UuidBits" />
     <field name="orderId" id="3" type="OrderId" />
+  </sbe:message>
+  <sbe:message name="CancelOrderResponse" id="6">
+    <field name="requestIdMostSignificantBits" id="1" type="UuidBits" />
+    <field name="requestIdLeastSignificantBits" id="2" type="UuidBits" />
+    <field name="orderId" id="3" type="OrderId" />
+    <field name="cancelled" id="4" type="BooleanFlag" />
+  </sbe:message>
+  <sbe:message name="RejectOrderResponse" id="7">
+    <field name="requestIdMostSignificantBits" id="1" type="UuidBits" />
+    <field name="requestIdLeastSignificantBits" id="2" type="UuidBits" />
+    <field name="orderId" id="3" type="OrderId" />
+    <field name="reason" id="4" type="RejectionReason" />
+  </sbe:message>
+  <sbe:message name="PlaceOrderResponse" id="5">
+    <field name="requestIdMostSignificantBits" id="1" type="UuidBits" />
+    <field name="requestIdLeastSignificantBits" id="2" type="UuidBits" />
+    <field name="orderId" id="3" type="OrderId" />
+    <field name="remainingLots" id="4" type="NonNegativeLong" />
+    <group name="trades" id="5" dimensionType="groupSizeEncoding">
+      <field name="incomingOrderId" id="6" type="OrderId" />
+      <field name="restingOrderId" id="7" type="OrderId" />
+      <field name="priceTicks" id="8" type="PositiveLong" />
+      <field name="quantityLots" id="9" type="PositiveLong" />
+    </group>
   </sbe:message>
 </sbe:messageSchema>

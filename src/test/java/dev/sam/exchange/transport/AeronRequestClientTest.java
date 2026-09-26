@@ -30,6 +30,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.CancelResult;
 import dev.sam.exchange.engine.CommandResult;
+import dev.sam.exchange.protocol.SbeRequestCodec;
+import dev.sam.exchange.protocol.SbeResponseCodec;
 import io.aeron.Aeron;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -57,9 +59,8 @@ class AeronRequestClientTest {
       AeronRequestClient client = new AeronRequestClient(publication, replies, new ClientConfig(timeout, attempts));
       CommandRequest request = new CommandRequest(new UUID(0L, 1L), new CancelOrder(7L));
       List<CommandRequest> received = new ArrayList<>();
-      CommandRequestCodec codec = new CommandRequestCodec();
-      FragmentHandler handler = (buffer, offset, length, header) -> received
-          .add(codec.decode(buffer.getStringAscii(offset)));
+      SbeRequestCodec codec = new SbeRequestCodec();
+      FragmentHandler handler = (buffer, offset, length, header) -> received.add(codec.decode(buffer, offset, length));
       long started = System.nanoTime();
       Future<CommandResult> result = executor.submit(() -> client.send(request));
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
@@ -136,9 +137,8 @@ class AeronRequestClientTest {
           new ClientConfig(Duration.ofMillis(300), 2));
       CommandRequest first = new CommandRequest(new UUID(0L, 1L), new CancelOrder(7L));
       List<CommandRequest> received = new ArrayList<>();
-      CommandRequestCodec codec = new CommandRequestCodec();
-      FragmentHandler handler = (buffer, offset, length, header) -> received
-          .add(codec.decode(buffer.getStringAscii(offset)));
+      SbeRequestCodec codec = new SbeRequestCodec();
+      FragmentHandler handler = (buffer, offset, length, header) -> received.add(codec.decode(buffer, offset, length));
       Future<CommandResult> firstResult = executor.submit(() -> client.send(first));
 
       awaitRequests(commands, handler, received, 2, firstResult);
@@ -179,9 +179,8 @@ class AeronRequestClientTest {
           new ClientConfig(Duration.ofMillis(500), 3));
       CommandRequest request = new CommandRequest(new UUID(0L, 1L), new CancelOrder(7L));
       List<CommandRequest> received = new ArrayList<>();
-      CommandRequestCodec codec = new CommandRequestCodec();
-      FragmentHandler handler = (buffer, offset, length, header) -> received
-          .add(codec.decode(buffer.getStringAscii(offset)));
+      SbeRequestCodec codec = new SbeRequestCodec();
+      FragmentHandler handler = (buffer, offset, length, header) -> received.add(codec.decode(buffer, offset, length));
       Future<CommandResult> result = executor.submit(() -> client.send(request));
       awaitRequests(commands, handler, received, 1, result);
       assertEquals(List.of(request), received, "The initial send must reach the peer before it disappears");
@@ -199,6 +198,50 @@ class AeronRequestClientTest {
       assertTrue(cause.getMessage().contains(request.requestId().toString()), cause.getMessage());
       assertTrue(cause.getMessage().contains("outcome unknown"), cause.getMessage());
       assertFalse(replies.isClosed(), "The client must leave the caller's subscription open after failure");
+      assertTrue(errors.isEmpty(), errors::toString);
+    }
+  }
+
+  @ParameterizedTest(name = "reply length adjustment: {0}")
+  @ValueSource(ints = {-1, 1})
+  @Timeout(10)
+  void rejectsMalformedReplyWithoutCompletingTheRequest(int lengthAdjustment, @TempDir Path tempDir) throws Exception {
+    ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
+    try (ExecutorService executor = Executors.newSingleThreadExecutor();
+        MediaDriver driver = MediaDriver
+            .launchEmbedded(new MediaDriver.Context().aeronDirectoryName(tempDir.resolve("aeron").toString())
+                .dirDeleteOnShutdown(true).errorHandler(errors::add));
+        Aeron aeron = Aeron
+            .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
+        Publication publication = aeron.addPublication("aeron:ipc", 1);
+        Subscription replies = aeron.addSubscription("aeron:ipc", 2);
+        Subscription commands = aeron.addSubscription("aeron:ipc", 1);
+        Publication responses = aeron.addPublication("aeron:ipc", 2)) {
+      awaitConnected(publication);
+      awaitConnected(responses);
+      AeronRequestClient client = new AeronRequestClient(publication, replies,
+          new ClientConfig(Duration.ofSeconds(2), 1));
+      CommandRequest request = new CommandRequest(new UUID(0L, 1L), new CancelOrder(7L));
+      List<CommandRequest> received = new ArrayList<>();
+      SbeRequestCodec codec = new SbeRequestCodec();
+      FragmentHandler handler = (buffer, offset, length, header) -> received.add(codec.decode(buffer, offset, length));
+      Future<CommandResult> result = executor.submit(() -> client.send(request));
+      awaitRequests(commands, handler, received, 1, result);
+
+      // A matching UUID is insufficient: the complete SBE frame must validate before it can finish the request.
+      sendResponse(responses, new CommandResponse(request.requestId(), new CancelResult(7L, true)), lengthAdjustment);
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+      SleepingIdleStrategy idle = new SleepingIdleStrategy();
+      while (errors.isEmpty()) {
+        assertFalse(result.isDone(), "Malformed reply completed the request");
+        assertTrue(System.nanoTime() - deadline < 0, "Malformed reply was not rejected");
+        idle.idle();
+      }
+      assertInstanceOf(IllegalArgumentException.class, errors.poll());
+      assertFalse(result.isDone(), "The client must still be waiting for a valid reply");
+
+      sendResponse(responses, new CommandResponse(request.requestId(), new CancelResult(7L, false)));
+      assertEquals(new CancelResult(7L, false), result.get(2, TimeUnit.SECONDS));
       assertTrue(errors.isEmpty(), errors::toString);
     }
   }
@@ -226,8 +269,13 @@ class AeronRequestClientTest {
   }
 
   private static void sendResponse(Publication publication, CommandResponse response) {
+    sendResponse(publication, response, 0);
+  }
+
+  private static void sendResponse(Publication publication, CommandResponse response, int lengthAdjustment) {
     ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
-    int length = buffer.putStringAscii(0, new CommandResponseCodec().encode(response));
+    buffer.setMemory(0, 256, (byte) 0x55);
+    int length = new SbeResponseCodec().encode(response, buffer, 0) + lengthAdjustment;
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
     SleepingIdleStrategy idle = new SleepingIdleStrategy();
     while (publication.offer(buffer, 0, length) < 0) {
