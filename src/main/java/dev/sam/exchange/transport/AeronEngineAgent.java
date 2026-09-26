@@ -8,8 +8,9 @@ import org.agrona.ExpandableArrayBuffer;
 import org.agrona.concurrent.Agent;
 import org.agrona.concurrent.NanoClock;
 import org.agrona.concurrent.SystemNanoClock;
-import dev.sam.exchange.persistence.RequestLog;
 
+import dev.sam.exchange.persistence.RequestLog;
+import dev.sam.exchange.protocol.SbeRequestCodec;
 import io.aeron.FragmentAssembler;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -31,12 +32,11 @@ public class AeronEngineAgent implements Agent {
   private int pendingResponseLength;
   private long replyDeadlineNanos;
 
-  private final CommandRequestCodec requestCodec = new CommandRequestCodec();
+  private final SbeRequestCodec requestCodec = new SbeRequestCodec();
   private final CommandResponseCodec responseCodec = new CommandResponseCodec();
   private final List<CommandRequest> receivedRequests = new ArrayList<>();
   private final FragmentHandler handler = (buffer, offset, length, header) -> {
-    String encoded = buffer.getStringAscii(offset);
-    CommandRequest request = requestCodec.decode(encoded);
+    CommandRequest request = requestCodec.decode(buffer, offset, length);
     receivedRequests.add(request);
   };
   private final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);

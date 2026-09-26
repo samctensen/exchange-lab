@@ -8,13 +8,14 @@ import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.SleepingIdleStrategy;
 
 import dev.sam.exchange.engine.CommandResult;
+import dev.sam.exchange.protocol.SbeRequestCodec;
 import io.aeron.FragmentAssembler;
 import io.aeron.Publication;
 import io.aeron.Subscription;
 import io.aeron.logbuffer.FragmentHandler;
 
 public class AeronRequestClient {
-  private final CommandRequestCodec requestCodec = new CommandRequestCodec();
+  private final SbeRequestCodec requestCodec = new SbeRequestCodec();
   private final CommandResponseCodec responseCodec = new CommandResponseCodec();
   private final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
   private final IdleStrategy idle = new SleepingIdleStrategy();
@@ -43,10 +44,8 @@ public class AeronRequestClient {
 
   public CommandResult send(CommandRequest request) {
 
-    String requestEncoding = requestCodec.encode(request);
+    int messageLength = requestCodec.encode(request, buffer, 0);
     List<CommandResult> matchingResults = new ArrayList<>(1);
-    int messageLength = buffer.putStringAscii(0, requestEncoding);
-
     for (int attempt = 1; attempt <= this.maxAttempts && matchingResults.isEmpty(); attempt++) {
 
       // Each send and reply wait gets its own configured timeout.

@@ -30,6 +30,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.CancelResult;
 import dev.sam.exchange.engine.CommandResult;
+import dev.sam.exchange.protocol.SbeRequestCodec;
 import io.aeron.Aeron;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -57,9 +58,8 @@ class AeronRequestClientTest {
       AeronRequestClient client = new AeronRequestClient(publication, replies, new ClientConfig(timeout, attempts));
       CommandRequest request = new CommandRequest(new UUID(0L, 1L), new CancelOrder(7L));
       List<CommandRequest> received = new ArrayList<>();
-      CommandRequestCodec codec = new CommandRequestCodec();
-      FragmentHandler handler = (buffer, offset, length, header) -> received
-          .add(codec.decode(buffer.getStringAscii(offset)));
+      SbeRequestCodec codec = new SbeRequestCodec();
+      FragmentHandler handler = (buffer, offset, length, header) -> received.add(codec.decode(buffer, offset, length));
       long started = System.nanoTime();
       Future<CommandResult> result = executor.submit(() -> client.send(request));
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
@@ -136,9 +136,8 @@ class AeronRequestClientTest {
           new ClientConfig(Duration.ofMillis(300), 2));
       CommandRequest first = new CommandRequest(new UUID(0L, 1L), new CancelOrder(7L));
       List<CommandRequest> received = new ArrayList<>();
-      CommandRequestCodec codec = new CommandRequestCodec();
-      FragmentHandler handler = (buffer, offset, length, header) -> received
-          .add(codec.decode(buffer.getStringAscii(offset)));
+      SbeRequestCodec codec = new SbeRequestCodec();
+      FragmentHandler handler = (buffer, offset, length, header) -> received.add(codec.decode(buffer, offset, length));
       Future<CommandResult> firstResult = executor.submit(() -> client.send(first));
 
       awaitRequests(commands, handler, received, 2, firstResult);
@@ -179,9 +178,8 @@ class AeronRequestClientTest {
           new ClientConfig(Duration.ofMillis(500), 3));
       CommandRequest request = new CommandRequest(new UUID(0L, 1L), new CancelOrder(7L));
       List<CommandRequest> received = new ArrayList<>();
-      CommandRequestCodec codec = new CommandRequestCodec();
-      FragmentHandler handler = (buffer, offset, length, header) -> received
-          .add(codec.decode(buffer.getStringAscii(offset)));
+      SbeRequestCodec codec = new SbeRequestCodec();
+      FragmentHandler handler = (buffer, offset, length, header) -> received.add(codec.decode(buffer, offset, length));
       Future<CommandResult> result = executor.submit(() -> client.send(request));
       awaitRequests(commands, handler, received, 1, result);
       assertEquals(List.of(request), received, "The initial send must reach the peer before it disappears");

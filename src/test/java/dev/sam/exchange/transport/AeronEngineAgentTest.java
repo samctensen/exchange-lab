@@ -2,6 +2,7 @@ package dev.sam.exchange.transport;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeout;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -16,10 +17,13 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 
 import org.agrona.ExpandableArrayBuffer;
+import org.agrona.DirectBuffer;
 import org.agrona.concurrent.SleepingIdleStrategy;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.MatchingEngine;
@@ -30,6 +34,7 @@ import dev.sam.exchange.engine.PlaceResult;
 import dev.sam.exchange.engine.Side;
 import dev.sam.exchange.engine.Trade;
 import dev.sam.exchange.persistence.RequestLog;
+import dev.sam.exchange.protocol.SbeRequestCodec;
 import org.agrona.concurrent.NanoClock;
 import io.aeron.Aeron;
 import io.aeron.FragmentAssembler;
@@ -80,12 +85,11 @@ class AeronEngineAgentTest {
 
   @Test
   void countsFragmentsAsWorkButProcessesOnlyTheCompleteRequest(@TempDir Path tempDir) throws Exception {
-    try (TestServer server = new TestServer(tempDir)) {
+    // A 64-byte MTU leaves 32 bytes of payload; a valid SBE place request needs 49 bytes.
+    try (TestServer server = new TestServer(tempDir, 64)) {
       CommandRequest request = new CommandRequest(new UUID(0L, 1L), new PlaceOrder(1L, Side.BID, 100L, 10L));
-      String encoded = new CommandRequestCodec().encode(request).replace(",PLACE,",
-          ",PLACE," + "0".repeat(server.commands.maxPayloadLength() * 2));
-      assertEquals(request, new CommandRequestCodec().decode(encoded));
-      server.sendEncoded(encoded);
+      int length = server.send(request);
+      assertTrue(length > server.commands.maxPayloadLength(), "The fixture must fragment without changing the message");
       int partialPasses = 0;
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
       SleepingIdleStrategy idle = new SleepingIdleStrategy();
@@ -105,6 +109,32 @@ class AeronEngineAgentTest {
       assertEquals(List.of(request), server.processor.processed);
       assertEquals(List.of(request), server.log.accepted);
       assertTrue(server.errors.isEmpty(), server.errors::toString);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {-1, 1})
+  void rejectsIncorrectRequestFrameLengthBeforeRecordingOrProcessing(int lengthAdjustment, @TempDir Path tempDir)
+      throws Exception {
+    try (TestServer server = new TestServer(tempDir)) {
+      CommandRequest request = new CommandRequest(new UUID(0L, 1L), new PlaceOrder(1L, Side.BID, 100L, 10L));
+      ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
+      buffer.setMemory(0, 256, (byte) 0x55);
+      int length = new SbeRequestCodec().encode(request, buffer, 0);
+      // The backing buffer holds a complete request. Only the offered frame length is invalid.
+      server.sendEncoded(buffer, length + lengthAdjustment);
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+      SleepingIdleStrategy idle = new SleepingIdleStrategy();
+      while (server.errors.isEmpty()) {
+        int work = server.agent.doWork();
+        assertTrue(System.nanoTime() - deadline < 0, "Invalid request was not rejected");
+        idle.idle(work);
+      }
+
+      assertInstanceOf(IllegalArgumentException.class, server.errors.peek());
+      assertEquals(0, server.log.offers);
+      assertTrue(server.processor.processed.isEmpty());
+      assertTrue(server.book.snapshot().isEmpty());
     }
   }
 
@@ -322,10 +352,14 @@ class AeronEngineAgentTest {
     private final AeronEngineAgent agent;
 
     TestServer(Path tempDir) throws IOException {
+      this(tempDir, 256);
+    }
+
+    TestServer(Path tempDir, int mtuLength) throws IOException {
       processor = new RecordingProcessor(book);
       driver = MediaDriver
           .launchEmbedded(new MediaDriver.Context().aeronDirectoryName(tempDir.resolve("aeron").toString())
-              .ipcMtuLength(256).dirDeleteOnShutdown(true).errorHandler(errors::add));
+              .ipcMtuLength(mtuLength).dirDeleteOnShutdown(true).errorHandler(errors::add));
       aeron = Aeron
           .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
       requests = aeron.addSubscription("aeron:ipc", 1);
@@ -344,13 +378,14 @@ class AeronEngineAgentTest {
       }
     }
 
-    void send(CommandRequest request) {
-      sendEncoded(new CommandRequestCodec().encode(request));
+    int send(CommandRequest request) {
+      ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
+      int length = new SbeRequestCodec().encode(request, buffer, 0);
+      sendEncoded(buffer, length);
+      return length;
     }
 
-    void sendEncoded(String encoded) {
-      ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
-      int length = buffer.putStringAscii(0, encoded);
+    void sendEncoded(DirectBuffer buffer, int length) {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
       SleepingIdleStrategy idle = new SleepingIdleStrategy();
       while (commands.offer(buffer, 0, length) < 0) {
