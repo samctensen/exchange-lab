@@ -31,6 +31,7 @@ import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.CancelResult;
 import dev.sam.exchange.engine.CommandResult;
 import dev.sam.exchange.protocol.SbeRequestCodec;
+import dev.sam.exchange.protocol.SbeResponseCodec;
 import io.aeron.Aeron;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -225,7 +226,7 @@ class AeronRequestClientTest {
 
   private static void sendResponse(Publication publication, CommandResponse response) {
     ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
-    int length = buffer.putStringAscii(0, new CommandResponseCodec().encode(response));
+    int length = new SbeResponseCodec().encode(response, buffer, 0);
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
     SleepingIdleStrategy idle = new SleepingIdleStrategy();
     while (publication.offer(buffer, 0, length) < 0) {

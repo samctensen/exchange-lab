@@ -35,6 +35,7 @@ import dev.sam.exchange.engine.Side;
 import dev.sam.exchange.engine.Trade;
 import dev.sam.exchange.persistence.RequestLog;
 import dev.sam.exchange.protocol.SbeRequestCodec;
+import dev.sam.exchange.protocol.SbeResponseCodec;
 import org.agrona.concurrent.NanoClock;
 import io.aeron.Aeron;
 import io.aeron.FragmentAssembler;
@@ -409,9 +410,9 @@ class AeronEngineAgentTest {
 
     List<CommandResponse> awaitResponses(Subscription responses, int count) throws IOException {
       List<CommandResponse> received = new ArrayList<>();
-      CommandResponseCodec codec = new CommandResponseCodec();
+      SbeResponseCodec codec = new SbeResponseCodec();
       FragmentAssembler assembler = new FragmentAssembler(
-          (buffer, offset, length, header) -> received.add(codec.decode(buffer.getStringAscii(offset))));
+          (buffer, offset, length, header) -> received.add(codec.decode(buffer, offset, length)));
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
       SleepingIdleStrategy idle = new SleepingIdleStrategy();
       while (received.size() < count) {

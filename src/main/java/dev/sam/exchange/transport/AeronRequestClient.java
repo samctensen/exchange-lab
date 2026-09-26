@@ -9,6 +9,7 @@ import org.agrona.concurrent.SleepingIdleStrategy;
 
 import dev.sam.exchange.engine.CommandResult;
 import dev.sam.exchange.protocol.SbeRequestCodec;
+import dev.sam.exchange.protocol.SbeResponseCodec;
 import io.aeron.FragmentAssembler;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -16,12 +17,12 @@ import io.aeron.logbuffer.FragmentHandler;
 
 public class AeronRequestClient {
   private final SbeRequestCodec requestCodec = new SbeRequestCodec();
-  private final CommandResponseCodec responseCodec = new CommandResponseCodec();
+  private final SbeResponseCodec responseCodec = new SbeResponseCodec();
   private final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
   private final IdleStrategy idle = new SleepingIdleStrategy();
   private final List<CommandResponse> receivedResponses = new ArrayList<>();
   private final FragmentHandler replyHandler = (replyBuffer, offset, length, header) -> {
-    CommandResponse response = responseCodec.decode(replyBuffer.getStringAscii(offset));
+    CommandResponse response = responseCodec.decode(replyBuffer, offset, length);
     receivedResponses.add(response);
   };
   private final FragmentAssembler replyAssembler = new FragmentAssembler(replyHandler);

@@ -30,6 +30,7 @@ import dev.sam.exchange.engine.PlaceResult;
 import dev.sam.exchange.engine.Side;
 import dev.sam.exchange.engine.Trade;
 import dev.sam.exchange.protocol.SbeRequestCodec;
+import dev.sam.exchange.protocol.SbeResponseCodec;
 import io.aeron.Aeron;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -112,7 +113,7 @@ class AeronEngineClientTest {
         CommandRequest first = decodeRequest(messages.getFirst());
         assertEquals(new PlaceOrder(1L, Side.BID, 100L, 10L), first.command());
 
-        // Ten one-lot fills with long resting IDs exceed this publication's single-fragment payload.
+        // Ten 32-byte trade entries plus the 44-byte prefix exceed this publication's single-fragment payload.
         List<Trade> firstTrades = new ArrayList<>();
         if (fragmentedReplies) {
           for (int i = 0; i < 10; i++) {
@@ -330,7 +331,7 @@ class AeronEngineClientTest {
 
   private static int sendResponse(Publication replies, CommandResponse response) {
     ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
-    int length = buffer.putStringAscii(0, new CommandResponseCodec().encode(response));
+    int length = new SbeResponseCodec().encode(response, buffer, 0);
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
     SleepingIdleStrategy idle = new SleepingIdleStrategy();
     while (replies.offer(buffer, 0, length) < 0) {

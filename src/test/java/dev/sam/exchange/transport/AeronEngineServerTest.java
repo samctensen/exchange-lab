@@ -32,6 +32,7 @@ import dev.sam.exchange.engine.RejectResult;
 import dev.sam.exchange.engine.Side;
 import dev.sam.exchange.engine.Trade;
 import dev.sam.exchange.protocol.SbeRequestCodec;
+import dev.sam.exchange.protocol.SbeResponseCodec;
 import io.aeron.archive.client.AeronArchive;
 import io.aeron.Aeron;
 import io.aeron.FragmentAssembler;
@@ -95,9 +96,11 @@ class AeronEngineServerTest {
 
     ArchiveTestSupport.record(archiveDirectory, initialRequests);
     PlaceResult expected = new PlaceResult(1000L, expectedTrades, 0L);
-    String encoded = new CommandResponseCodec().encode(new CommandResponse(UUID.randomUUID(), expected));
-    assertTrue(encoded.length() > 256, "The reply must exceed the old server buffer");
-    assertTrue(encoded.length() > IPC_MTU_LENGTH, "The reply must require multiple fragments");
+    int encodedLength = new SbeResponseCodec().encode(new CommandResponse(UUID.randomUUID(), expected),
+        new ExpandableArrayBuffer(256), 0);
+    assertEquals(3244, encodedLength, "The reply contains a 44-byte prefix and 100 32-byte trades");
+    assertTrue(encodedLength > 256, "The reply must exceed the initial server buffer");
+    assertTrue(encodedLength > IPC_MTU_LENGTH, "The reply must require multiple fragments");
 
     // A single bid sweeps all 100 resting asks; the UUID-filtering test peer reassembles its reply.
     List<CommandResult> results = runServerSession(tempDir, archiveDirectory,
@@ -436,12 +439,12 @@ class AeronEngineServerTest {
         Publication commands = aeron.addPublication("aeron:ipc", 1);
         Subscription replies = aeron.addSubscription("aeron:ipc", 2)) {
       SbeRequestCodec requestCodec = new SbeRequestCodec();
-      CommandResponseCodec responseCodec = new CommandResponseCodec();
+      SbeResponseCodec responseCodec = new SbeResponseCodec();
       SleepingIdleStrategy idle = new SleepingIdleStrategy();
       ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
       List<CommandResponse> responses = new ArrayList<>();
-      FragmentAssembler assembler = new FragmentAssembler((replyBuffer, offset, length, header) -> responses
-          .add(responseCodec.decode(replyBuffer.getStringAscii(offset))));
+      FragmentAssembler assembler = new FragmentAssembler(
+          (replyBuffer, offset, length, header) -> responses.add(responseCodec.decode(replyBuffer, offset, length)));
 
       for (int i = 0; i < requests.size(); i++) {
         CommandRequest request = requests.get(i);
