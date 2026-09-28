@@ -1,0 +1,12 @@
+Warmup: 500 requests
+Attempts per request: 1
+Max in flight: 4
+Client idle strategy: sleep
+Samples: 2000 requests
+Round-trip latency (microseconds):
+p50: 7005.791 us
+p99: 9993.000 us
+max: 14683.375 us
+Throughput: 556.531 requests/s
+Client thread CPU: 51.074%
+Client JVM CPU: 53.838%

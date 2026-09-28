@@ -1,0 +1,361 @@
+diff --git a/src/main/java/dev/sam/exchange/transport/AeronEngineAgent.java b/src/main/java/dev/sam/exchange/transport/AeronEngineAgent.java
+index 8e467cb..6b1ded8 100644
+--- a/src/main/java/dev/sam/exchange/transport/AeronEngineAgent.java
++++ b/src/main/java/dev/sam/exchange/transport/AeronEngineAgent.java
+@@ -1,7 +1,10 @@
+ package dev.sam.exchange.transport;
+ 
++import java.util.ArrayDeque;
+ import java.util.ArrayList;
++import java.util.Deque;
+ import java.util.List;
++import java.util.UUID;
+ import java.util.concurrent.TimeUnit;
+ 
+ import org.agrona.ExpandableArrayBuffer;
+@@ -26,8 +29,8 @@ public class AeronEngineAgent implements Agent {
+   private final boolean logResults;
+ 
+   private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
++  private static final int MAX_PENDING_LOG_REQUESTS = 8;
+   private CommandRequest pendingRequest;
+-  private long pendingLogPosition = -1;
+   private long logDeadlineNanos;
+   private CommandResponse pendingResponse;
+   private int pendingResponseLength;
+@@ -42,6 +45,7 @@ public class AeronEngineAgent implements Agent {
+   };
+   private final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
+   private final FragmentAssembler assembler = new FragmentAssembler(handler);
++  private final Deque<PendingLoggedRequest> pendingLoggedRequests = new ArrayDeque<>();
+ 
+   public AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor,
+       RequestLog requestLog) {
+@@ -65,51 +69,18 @@ public class AeronEngineAgent implements Agent {
+ 
+   @Override
+   public int doWork() {
+-    // Finish delivery before admitting another request. AgentRunner owns idling between passes.
+-    if (pendingResponse != null)
++    if (pendingResponse != null) {
+       return offerPendingReply();
+-
+-    int work = 0;
+-    if (pendingRequest == null) {
+-      work = requests.poll(assembler, 1);
+-      // FragmentAssembler enqueues only complete requests.
+-      if (receivedRequests.isEmpty())
+-        return work;
+-      pendingRequest = receivedRequests.removeFirst();
+-      if (processor.hasProcessed(pendingRequest.requestId())) {
+-        // The original request was already recorded. Retries and UUID conflicts need no new log entry.
+-        prepareReply();
+-        return work + 1 + offerPendingReply();
+-      }
+-      pendingLogPosition = -1;
+-      logDeadlineNanos = clock.nanoTime() + TIMEOUT_NS;
+-    }
+-
+-    if (pendingLogPosition < 0) {
+-      long position = requestLog.offer(pendingRequest);
+-      if (position < 0) {
+-        checkLogDeadline("offering request; last offer result: " + position);
+-        return work;
+-      }
+-      pendingLogPosition = position;
+-      // Once accepted, never offer this request again. Wait for this exact end position.
+-      logDeadlineNanos = clock.nanoTime() + TIMEOUT_NS;
+-      work++;
+     }
+ 
+-    if (!requestLog.isRecorded(pendingLogPosition)) {
+-      checkLogDeadline("request recording at position " + pendingLogPosition);
+-      return work;
+-    }
+-
+-    // Archive has written the request. Only now may it mutate the engine or produce a reply.
+-    prepareReply();
+-    return work + 1 + offerPendingReply();
++    int work = fillLogWindow();
++    work += processRecordedHead();
++    work += offerPendingReply();
++    return work;
+   }
+ 
+-  private void prepareReply() {
+-    pendingResponse = processor.process(pendingRequest);
+-    pendingRequest = null;
++  private void prepareReply(CommandRequest request) {
++    pendingResponse = processor.process(request);
+     pendingResponseLength = responseCodec.encode(pendingResponse, buffer, 0);
+     replyDeadlineNanos = clock.nanoTime() + TIMEOUT_NS;
+   }
+@@ -154,4 +125,85 @@ public class AeronEngineAgent implements Agent {
+ 
+     return 0;
+   }
++
++  private int processRecordedHead() {
++    if (pendingResponse != null) {
++      return 0;
++    }
++    PendingLoggedRequest head = pendingLoggedRequests.peek();
++    if (head == null) {
++      return 0;
++    }
++    boolean isRecorded = requestLog.isRecorded(head.endPosition());
++    if (!isRecorded) {
++      boolean isExpired = (clock.nanoTime() - head.deadlineNanos()) >= 0;
++      if (isExpired) {
++        throw new IllegalStateException("Timed out waiting for log record at position " + head.endPosition());
++      }
++      return 0;
++    }
++    pendingLoggedRequests.removeFirst();
++    prepareReply(head.request());
++    return 1;
++  }
++
++  private int offerPendingRequest() {
++    if (pendingRequest == null || pendingLoggedRequests.size() >= MAX_PENDING_LOG_REQUESTS) {
++      return 0;
++    }
++    UUID requestId = pendingRequest.requestId();
++    if (processor.hasProcessed(requestId)
++        || pendingLoggedRequests.stream().anyMatch(entry -> entry.request().requestId().equals(requestId))) {
++      return 0;
++    }
++    long position = requestLog.offer(pendingRequest);
++    if (position < 0) {
++      checkLogDeadline("offering pending request; last offer result: " + position);
++      return 0;
++    }
++    pendingLoggedRequests.addLast(new PendingLoggedRequest(pendingRequest, position, clock.nanoTime() + TIMEOUT_NS));
++    pendingRequest = null;
++    return 1;
++  }
++
++  private int processCachedRequest() {
++    if (pendingRequest == null || pendingResponse != null || !pendingLoggedRequests.isEmpty()
++        || !processor.hasProcessed(pendingRequest.requestId())) {
++      return 0;
++    }
++
++    prepareReply(pendingRequest);
++    pendingRequest = null;
++    return 1;
++  }
++
++  private int fillLogWindow() {
++    if (this.pendingResponse != null) {
++      return 0;
++    }
++    int work = 0;
++    while (pendingLoggedRequests.size() < MAX_PENDING_LOG_REQUESTS) {
++      if (pendingRequest == null) {
++        int result = requests.poll(assembler, 1);
++        work = work + result;
++        if (receivedRequests.size() == 0) {
++          break;
++        } else {
++          pendingRequest = receivedRequests.removeFirst();
++          logDeadlineNanos = clock.nanoTime() + TIMEOUT_NS;
++        }
++      }
++      int processed = processCachedRequest();
++      work = work + processed;
++      if (processed == 1) {
++        break;
++      }
++      int offered = offerPendingRequest();
++      work = work + offered;
++      if (offered == 0) {
++        break;
++      }
++    }
++    return work;
++  }
+ }
+diff --git a/src/main/java/dev/sam/exchange/transport/AeronLatencyBenchmark.java b/src/main/java/dev/sam/exchange/transport/AeronLatencyBenchmark.java
+index 38d8aa5..e863a72 100644
+--- a/src/main/java/dev/sam/exchange/transport/AeronLatencyBenchmark.java
++++ b/src/main/java/dev/sam/exchange/transport/AeronLatencyBenchmark.java
+@@ -3,12 +3,20 @@ package dev.sam.exchange.transport;
+ import java.nio.file.Path;
+ import java.time.Duration;
+ import java.util.Arrays;
++import java.util.LinkedHashMap;
+ import java.util.Locale;
++import java.util.Map;
+ import java.util.UUID;
+ 
++import org.agrona.ExpandableArrayBuffer;
++import org.agrona.concurrent.IdleStrategy;
++import org.agrona.concurrent.NanoClock;
++import org.agrona.concurrent.SleepingIdleStrategy;
++import org.agrona.concurrent.SystemNanoClock;
++
+ import dev.sam.exchange.engine.CancelOrder;
+ import dev.sam.exchange.engine.CancelResult;
+-import dev.sam.exchange.engine.CommandResult;
++import dev.sam.exchange.protocol.SbeRequestCodec;
+ import io.aeron.Aeron;
+ import io.aeron.Publication;
+ import io.aeron.Subscription;
+@@ -18,19 +26,27 @@ public class AeronLatencyBenchmark {
+   private static final int DEFAULT_SAMPLE_COUNT = 2_000;
+   private static final CancelResult EXPECTED_RESULT = new CancelResult(1L, false);
+ 
++  record Measurement(long[] latencies, long elapsedNanos) {
++  }
++
++  private record PendingSample(int index, UUID requestId, long startedNanos, long deadlineNanos) {
++  }
++
+   public static void main(String[] args) {
+-    if (args.length > 2) {
+-      throw new IllegalArgumentException("Usage: AeronLatencyBenchmark [warmupCount] [sampleCount]");
++    if (args.length > 3) {
++      throw new IllegalArgumentException("Usage: AeronLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight]");
+     }
+     int warmupCount = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_WARMUP_COUNT;
+     int sampleCount = args.length > 1 ? Integer.parseInt(args[1]) : DEFAULT_SAMPLE_COUNT;
+-    if (warmupCount < 0 || sampleCount < 1) {
+-      throw new IllegalArgumentException("Warmup count must be non-negative and sample count must be positive");
++    int maxInFlight = args.length > 2 ? Integer.parseInt(args[2]) : 1;
++    if (warmupCount < 0 || sampleCount < 1 || maxInFlight < 1) {
++      throw new IllegalArgumentException(
++          "Warmup count must be non-negative; sample count and max in flight must be positive");
+     }
+ 
+     // Use a separate server with a fresh archive directory and --quiet for a comparable baseline.
+     String aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
+-    long[] latencies = new long[sampleCount];
++    Measurement measured;
+     try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectory));
+         Publication publication = aeron.addPublication("aeron:ipc", 1);
+         Subscription replies = aeron.addSubscription("aeron:ipc", 2)) {
+@@ -38,33 +54,94 @@ public class AeronLatencyBenchmark {
+       AeronRequestClient client = new AeronRequestClient(publication, replies,
+           new ClientConfig(Duration.ofSeconds(5), 1));
+ 
+-      for (int i = 0; i < warmupCount; i++) {
+-        sendTimedRequest(client);
+-      }
+-      for (int i = 0; i < sampleCount; i++) {
+-        latencies[i] = sendTimedRequest(client);
+-      }
++      IdleStrategy idle = new SleepingIdleStrategy();
++      // Drain all warmup replies before starting the measured phase.
++      measure(client, warmupCount, maxInFlight, SystemNanoClock.INSTANCE, idle);
++      measured = measure(client, sampleCount, maxInFlight, SystemNanoClock.INSTANCE, idle);
+     }
+ 
+     // Sorting and console output happen after every measured request has completed successfully.
+     System.out.println("Warmup: " + warmupCount + " requests");
+     System.out.println("Attempts per request: 1");
+-    System.out.print(summarize(latencies));
++    System.out.println("Max in flight: " + maxInFlight);
++    System.out.print(summarize(measured.latencies(), measured.elapsedNanos()));
+   }
+ 
+-  private static long sendTimedRequest(AeronRequestClient client) {
+-    // A new UUID exercises the recording path and engine instead of the server's response cache.
+-    // Request construction is outside the timer; the timer covers send() through its matching reply.
+-    CommandRequest request = new CommandRequest(UUID.randomUUID(), new CancelOrder(1L));
+-    long started = System.nanoTime();
+-    CommandResult result = client.send(request);
+-    long elapsed = System.nanoTime() - started;
+-
+-    if (!EXPECTED_RESULT.equals(result)) {
+-      throw new IllegalStateException("Unexpected benchmark response for request " + request.requestId() + ": " + result
+-          + "; use a fresh, empty benchmark archive directory");
++  static Measurement measure(AeronRequestClient client, int count, int maxInFlight, NanoClock clock,
++      IdleStrategy idle) {
++    long[] latencies = new long[count];
++    Map<UUID, PendingSample> inFlight = new LinkedHashMap<>();
++    SbeRequestCodec codec = new SbeRequestCodec();
++    ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(64);
++    long timeoutNanos = client.config().timeout().toNanos();
++    PendingSample pendingOffer = null;
++    int encodedLength = 0;
++    int sent = 0;
++    long runStarted = clock.nanoTime();
++
++    while (sent < count || !inFlight.isEmpty()) {
++      int work = 0;
++      while (sent < count && inFlight.size() < maxInFlight) {
++        if (pendingOffer == null) {
++          // Fresh UUIDs exercise recording rather than the response cache. Construction is outside the latency timer.
++          CommandRequest request = new CommandRequest(UUID.randomUUID(), new CancelOrder(1L));
++          long started = clock.nanoTime();
++          pendingOffer = new PendingSample(sent, request.requestId(), started, started + timeoutNanos);
++          encodedLength = codec.encode(request, buffer, 0);
++        }
++
++        long result = client.trySend(buffer, 0, encodedLength);
++        if (result < 0) {
++          if (result == Publication.CLOSED || result == Publication.MAX_POSITION_EXCEEDED) {
++            throw new IllegalStateException(
++                "Request publication failed for " + pendingOffer.requestId() + "; offer result: " + result);
++          }
++          if (clock.nanoTime() - pendingOffer.deadlineNanos() >= 0) {
++            throw new IllegalStateException(
++                "Timed out sending request " + pendingOffer.requestId() + "; last offer result: " + result);
++          }
++          // Keep these bytes and their original timer, but still poll replies while back pressured.
++          break;
++        }
++
++        inFlight.put(pendingOffer.requestId(), new PendingSample(pendingOffer.index(), pendingOffer.requestId(),
++            pendingOffer.startedNanos(), clock.nanoTime() + timeoutNanos));
++        pendingOffer = null;
++        sent++;
++        work++;
++      }
++
++      work += client.pollResponses(response -> {
++        PendingSample sample = inFlight.remove(response.requestId());
++        // Streams can carry unrelated or duplicate replies; only an active UUID can complete a sample.
++        if (sample == null)
++          return;
++        long elapsed = clock.nanoTime() - sample.startedNanos();
++        if (!EXPECTED_RESULT.equals(response.result())) {
++          throw new IllegalStateException("Unexpected benchmark response for request " + response.requestId() + ": "
++              + response.result() + "; use a fresh, empty benchmark archive directory");
++        }
++        latencies[sample.index()] = elapsed;
++      }, Math.min(maxInFlight, 10));
++
++      long now = clock.nanoTime();
++      for (PendingSample sample : inFlight.values()) {
++        if (now - sample.deadlineNanos() >= 0) {
++          throw new IllegalStateException(
++              "No reply after 1 attempts for request " + sample.requestId() + "; outcome unknown");
++        }
++      }
++      idle.idle(work);
+     }
+-    return elapsed;
++    return new Measurement(latencies, clock.nanoTime() - runStarted);
++  }
++
++  static String summarize(long[] latencies, long elapsedNanos) {
++    if (elapsedNanos <= 0)
++      throw new IllegalArgumentException("Measured duration must be positive");
++    // Latencies overlap when pipelining. Throughput uses elapsed time for the entire measured phase.
++    return summarize(latencies) + String.format(Locale.ROOT, "Throughput: %.3f requests/s%n",
++        latencies.length * 1_000_000_000.0 / elapsedNanos);
+   }
+ 
+   static String summarize(long[] latencies) {
+diff --git a/src/main/java/dev/sam/exchange/transport/PendingLoggedRequest.java b/src/main/java/dev/sam/exchange/transport/PendingLoggedRequest.java
+new file mode 100644
+index 0000000..83a6a40
+--- /dev/null
++++ b/src/main/java/dev/sam/exchange/transport/PendingLoggedRequest.java
+@@ -0,0 +1,4 @@
++package dev.sam.exchange.transport;
++
++record PendingLoggedRequest(CommandRequest request, long endPosition, long deadlineNanos) {
++}

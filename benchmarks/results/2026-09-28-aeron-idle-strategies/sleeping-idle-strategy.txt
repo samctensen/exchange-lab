@@ -1,0 +1,66 @@
+Compiled from "SleepingIdleStrategy.java"
+public final class org.agrona.concurrent.SleepingIdleStrategy implements org.agrona.concurrent.IdleStrategy {
+  public static final java.lang.String ALIAS;
+
+  public static final long DEFAULT_SLEEP_PERIOD_NS;
+
+  public org.agrona.concurrent.SleepingIdleStrategy();
+    Code:
+         0: aload_0
+         1: invokespecial #1                  // Method java/lang/Object."<init>":()V
+         4: aload_0
+         5: ldc2_w        #9                  // long 1000l
+         8: putfield      #11                 // Field sleepPeriodNs:J
+        11: return
+
+  public org.agrona.concurrent.SleepingIdleStrategy(long);
+    Code:
+         0: aload_0
+         1: invokespecial #1                  // Method java/lang/Object."<init>":()V
+         4: aload_0
+         5: lload_1
+         6: putfield      #11                 // Field sleepPeriodNs:J
+         9: return
+
+  public org.agrona.concurrent.SleepingIdleStrategy(long, java.util.concurrent.TimeUnit);
+    Code:
+         0: aload_0
+         1: aload_3
+         2: lload_1
+         3: invokevirtual #15                 // Method java/util/concurrent/TimeUnit.toNanos:(J)J
+         6: invokespecial #21                 // Method "<init>":(J)V
+         9: return
+
+  public void idle(int);
+    Code:
+         0: iload_1
+         1: ifle          5
+         4: return
+         5: aload_0
+         6: getfield      #11                 // Field sleepPeriodNs:J
+         9: invokestatic  #24                 // Method java/util/concurrent/locks/LockSupport.parkNanos:(J)V
+        12: return
+
+  public void idle();
+    Code:
+         0: aload_0
+         1: getfield      #11                 // Field sleepPeriodNs:J
+         4: invokestatic  #24                 // Method java/util/concurrent/locks/LockSupport.parkNanos:(J)V
+         7: return
+
+  public void reset();
+    Code:
+         0: return
+
+  public java.lang.String alias();
+    Code:
+         0: ldc           #29                 // String sleep-ns
+         2: areturn
+
+  public java.lang.String toString();
+    Code:
+         0: aload_0
+         1: getfield      #11                 // Field sleepPeriodNs:J
+         4: invokedynamic #31,  0             // InvokeDynamic #0:makeConcatWithConstants:(J)Ljava/lang/String;
+         9: areturn
+}
