@@ -1,7 +1,10 @@
 package dev.sam.exchange.transport;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import org.agrona.ExpandableArrayBuffer;
@@ -26,8 +29,8 @@ public class AeronEngineAgent implements Agent {
   private final boolean logResults;
 
   private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
+  private static final int MAX_PENDING_LOG_REQUESTS = 8;
   private CommandRequest pendingRequest;
-  private long pendingLogPosition = -1;
   private long logDeadlineNanos;
   private CommandResponse pendingResponse;
   private int pendingResponseLength;
@@ -42,6 +45,7 @@ public class AeronEngineAgent implements Agent {
   };
   private final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
   private final FragmentAssembler assembler = new FragmentAssembler(handler);
+  private final Deque<PendingLoggedRequest> pendingLoggedRequests = new ArrayDeque<>();
 
   public AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor,
       RequestLog requestLog) {
@@ -65,51 +69,18 @@ public class AeronEngineAgent implements Agent {
 
   @Override
   public int doWork() {
-    // Finish delivery before admitting another request. AgentRunner owns idling between passes.
-    if (pendingResponse != null)
+    if (pendingResponse != null) {
       return offerPendingReply();
-
-    int work = 0;
-    if (pendingRequest == null) {
-      work = requests.poll(assembler, 1);
-      // FragmentAssembler enqueues only complete requests.
-      if (receivedRequests.isEmpty())
-        return work;
-      pendingRequest = receivedRequests.removeFirst();
-      if (processor.hasProcessed(pendingRequest.requestId())) {
-        // The original request was already recorded. Retries and UUID conflicts need no new log entry.
-        prepareReply();
-        return work + 1 + offerPendingReply();
-      }
-      pendingLogPosition = -1;
-      logDeadlineNanos = clock.nanoTime() + TIMEOUT_NS;
     }
 
-    if (pendingLogPosition < 0) {
-      long position = requestLog.offer(pendingRequest);
-      if (position < 0) {
-        checkLogDeadline("offering request; last offer result: " + position);
-        return work;
-      }
-      pendingLogPosition = position;
-      // Once accepted, never offer this request again. Wait for this exact end position.
-      logDeadlineNanos = clock.nanoTime() + TIMEOUT_NS;
-      work++;
-    }
-
-    if (!requestLog.isRecorded(pendingLogPosition)) {
-      checkLogDeadline("request recording at position " + pendingLogPosition);
-      return work;
-    }
-
-    // Archive has written the request. Only now may it mutate the engine or produce a reply.
-    prepareReply();
-    return work + 1 + offerPendingReply();
+    int work = fillLogWindow();
+    work += processRecordedHead();
+    work += offerPendingReply();
+    return work;
   }
 
-  private void prepareReply() {
-    pendingResponse = processor.process(pendingRequest);
-    pendingRequest = null;
+  private void prepareReply(CommandRequest request) {
+    pendingResponse = processor.process(request);
     pendingResponseLength = responseCodec.encode(pendingResponse, buffer, 0);
     replyDeadlineNanos = clock.nanoTime() + TIMEOUT_NS;
   }
@@ -153,5 +124,86 @@ public class AeronEngineAgent implements Agent {
     }
 
     return 0;
+  }
+
+  private int processRecordedHead() {
+    if (pendingResponse != null) {
+      return 0;
+    }
+    PendingLoggedRequest head = pendingLoggedRequests.peek();
+    if (head == null) {
+      return 0;
+    }
+    boolean isRecorded = requestLog.isRecorded(head.endPosition());
+    if (!isRecorded) {
+      boolean isExpired = (clock.nanoTime() - head.deadlineNanos()) >= 0;
+      if (isExpired) {
+        throw new IllegalStateException("Timed out waiting for log record at position " + head.endPosition());
+      }
+      return 0;
+    }
+    pendingLoggedRequests.removeFirst();
+    prepareReply(head.request());
+    return 1;
+  }
+
+  private int offerPendingRequest() {
+    if (pendingRequest == null || pendingLoggedRequests.size() >= MAX_PENDING_LOG_REQUESTS) {
+      return 0;
+    }
+    UUID requestId = pendingRequest.requestId();
+    if (processor.hasProcessed(requestId)
+        || pendingLoggedRequests.stream().anyMatch(entry -> entry.request().requestId().equals(requestId))) {
+      return 0;
+    }
+    long position = requestLog.offer(pendingRequest);
+    if (position < 0) {
+      checkLogDeadline("offering pending request; last offer result: " + position);
+      return 0;
+    }
+    pendingLoggedRequests.addLast(new PendingLoggedRequest(pendingRequest, position, clock.nanoTime() + TIMEOUT_NS));
+    pendingRequest = null;
+    return 1;
+  }
+
+  private int processCachedRequest() {
+    if (pendingRequest == null || pendingResponse != null || !pendingLoggedRequests.isEmpty()
+        || !processor.hasProcessed(pendingRequest.requestId())) {
+      return 0;
+    }
+
+    prepareReply(pendingRequest);
+    pendingRequest = null;
+    return 1;
+  }
+
+  private int fillLogWindow() {
+    if (this.pendingResponse != null) {
+      return 0;
+    }
+    int work = 0;
+    while (pendingLoggedRequests.size() < MAX_PENDING_LOG_REQUESTS) {
+      if (pendingRequest == null) {
+        int result = requests.poll(assembler, 1);
+        work = work + result;
+        if (receivedRequests.size() == 0) {
+          break;
+        } else {
+          pendingRequest = receivedRequests.removeFirst();
+          logDeadlineNanos = clock.nanoTime() + TIMEOUT_NS;
+        }
+      }
+      int processed = processCachedRequest();
+      work = work + processed;
+      if (processed == 1) {
+        break;
+      }
+      int offered = offerPendingRequest();
+      work = work + offered;
+      if (offered == 0) {
+        break;
+      }
+    }
+    return work;
   }
 }
