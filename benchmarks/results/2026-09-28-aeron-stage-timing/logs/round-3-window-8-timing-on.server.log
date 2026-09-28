@@ -1,0 +1,10 @@
+Server ready: /private/tmp/exchange-stage-measure-u85zbwt2/exchange-lab-aeron
+Archive: /private/tmp/exchange-stage-measure-u85zbwt2/archive
+Request recording: 0
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=1.575 p50=0.583 p99=21.375 max=92.500 us
+Recording observation: mean=7750.708 p50=7972.000 p99=8293.625 max=13996.875 us
+Process and encode: mean=0.614 p50=0.167 p99=10.083 max=76.833 us
+Reply offer: mean=0.459 p50=0.167 p99=6.500 max=26.375 us
+Server total: mean=7753.356 p50=7974.333 p99=8294.500 max=13997.917 us

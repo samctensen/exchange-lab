@@ -36,15 +36,18 @@ import io.aeron.driver.MediaDriver;
 @Timeout(20)
 class AeronLatencyBenchmarkTest {
   @ParameterizedTest
-  @CsvSource({"0, 1, 1, sleep", "5, 12, 2, sleep", "5, 13, 4, sleep", "5, 19, 8, sleep", "0, 3, 16, sleep",
-      "0, 1, 1, spin", "5, 19, 8, spin"})
+  @CsvSource({"0, 1, 1, sleep, true", "5, 12, 2, sleep, false", "5, 13, 4, sleep, false", "5, 19, 8, sleep, true",
+      "0, 3, 16, sleep, false", "0, 1, 1, spin, false", "5, 19, 8, spin, false"})
   void measuresFreshRequestsAfterWarmupAgainstAQuietServer(int warmup, int samples, int maxInFlight, String idleMode,
-      @TempDir Path tempDir) throws Exception {
+      boolean stageTiming, @TempDir Path tempDir) throws Exception {
     Path archiveDirectory = tempDir.resolve("benchmark-archive");
     Path serverLog = tempDir.resolve("server.log");
     Path benchmarkLog = tempDir.resolve("benchmark.log");
     Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
-    Process server = startMain(tempDir, serverLog, AeronEngineServer.class, archiveDirectory.toString(), "--quiet");
+    List<String> serverArgs = new ArrayList<>(List.of(archiveDirectory.toString(), "--quiet"));
+    if (stageTiming)
+      serverArgs.add("--stage-timing=" + warmup + "," + samples);
+    Process server = startMain(tempDir, serverLog, AeronEngineServer.class, serverArgs.toArray(String[]::new));
     Process benchmark = null;
     try {
       awaitOutput(server, serverLog, "Server ready:");
@@ -86,6 +89,16 @@ class AeronLatencyBenchmarkTest {
       assertTrue(output.contains("Server ready:"), "Quiet mode must retain startup information");
       assertFalse(output.contains("Result:"), "Per-order result logging must be disabled in quiet mode\n" + output);
       assertFalse(output.contains("Exception"), output);
+      if (stageTiming) {
+        assertTrue(output.contains("Stage timing: " + samples + "/" + samples + " samples, skipped " + warmup + "/"
+            + warmup + " completed logged requests"), output);
+        for (String stage : List.of("Log offer", "Recording observation", "Process and encode", "Reply offer",
+            "Server total")) {
+          assertTrue(output.contains(stage + ": mean="), output);
+        }
+      } else {
+        assertFalse(output.contains("Stage timing:"), "Server timing must be opt-in\n" + output);
+      }
       assertFalse(Files.exists(driverDirectory), "Server did not clean up its driver");
     } finally {
       stopIfAlive(benchmark);

@@ -27,6 +27,7 @@ public class AeronEngineAgent implements Agent {
   private final RequestLog requestLog;
   private final NanoClock clock;
   private final boolean logResults;
+  private final EngineStageTimings stageTimings;
 
   private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
   private static final int MAX_PENDING_LOG_REQUESTS = 8;
@@ -35,6 +36,10 @@ public class AeronEngineAgent implements Agent {
   private CommandResponse pendingResponse;
   private int pendingResponseLength;
   private long replyDeadlineNanos;
+  private long admittedNanos;
+  private PendingLoggedRequest timedReply;
+  private long recordedNanos;
+  private long preparedNanos;
 
   private final SbeRequestCodec requestCodec = new SbeRequestCodec();
   private final SbeResponseCodec responseCodec = new SbeResponseCodec();
@@ -59,12 +64,18 @@ public class AeronEngineAgent implements Agent {
 
   AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor, RequestLog requestLog,
       boolean logResults, NanoClock clock) {
+    this(requests, replies, processor, requestLog, logResults, clock, null);
+  }
+
+  AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor, RequestLog requestLog,
+      boolean logResults, NanoClock clock, EngineStageTimings stageTimings) {
     this.requests = requests;
     this.replies = replies;
     this.processor = processor;
     this.requestLog = requestLog;
     this.logResults = logResults;
     this.clock = clock;
+    this.stageTimings = stageTimings;
   }
 
   @Override
@@ -82,7 +93,8 @@ public class AeronEngineAgent implements Agent {
   private void prepareReply(CommandRequest request) {
     pendingResponse = processor.process(request);
     pendingResponseLength = responseCodec.encode(pendingResponse, buffer, 0);
-    replyDeadlineNanos = clock.nanoTime() + TIMEOUT_NS;
+    preparedNanos = clock.nanoTime();
+    replyDeadlineNanos = preparedNanos + TIMEOUT_NS;
   }
 
   private void checkLogDeadline(String operation) {
@@ -104,6 +116,11 @@ public class AeronEngineAgent implements Agent {
     long offerResult = replies.offer(buffer, 0, pendingResponseLength);
 
     if (offerResult >= 0) {
+      if (timedReply != null) {
+        stageTimings.record(timedReply.admittedNanos(), timedReply.offeredNanos(), recordedNanos, preparedNanos,
+            clock.nanoTime());
+        timedReply = null;
+      }
       if (logResults) {
         System.out.println("Result: " + pendingResponse.result());
       }
@@ -142,6 +159,11 @@ public class AeronEngineAgent implements Agent {
       }
       return 0;
     }
+    if (stageTimings != null) {
+      // This includes FIFO delay and when the agent observes progress, not just Archive disk work.
+      recordedNanos = clock.nanoTime();
+      timedReply = head;
+    }
     pendingLoggedRequests.removeFirst();
     prepareReply(head.request());
     return 1;
@@ -161,7 +183,9 @@ public class AeronEngineAgent implements Agent {
       checkLogDeadline("offering pending request; last offer result: " + position);
       return 0;
     }
-    pendingLoggedRequests.addLast(new PendingLoggedRequest(pendingRequest, position, clock.nanoTime() + TIMEOUT_NS));
+    long offeredNanos = clock.nanoTime();
+    pendingLoggedRequests.addLast(
+        new PendingLoggedRequest(pendingRequest, position, offeredNanos + TIMEOUT_NS, admittedNanos, offeredNanos));
     pendingRequest = null;
     return 1;
   }
@@ -190,7 +214,8 @@ public class AeronEngineAgent implements Agent {
           break;
         } else {
           pendingRequest = receivedRequests.removeFirst();
-          logDeadlineNanos = clock.nanoTime() + TIMEOUT_NS;
+          admittedNanos = clock.nanoTime();
+          logDeadlineNanos = admittedNanos + TIMEOUT_NS;
         }
       }
       int processed = processCachedRequest();

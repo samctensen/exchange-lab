@@ -1,0 +1,10 @@
+Server ready: /private/tmp/exchange-stage-measure-arbojxp8/exchange-lab-aeron
+Archive: /private/tmp/exchange-stage-measure-arbojxp8/archive
+Request recording: 0
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=3.944 p50=1.708 p99=19.291 max=111.375 us
+Recording observation: mean=3825.752 p50=3962.875 p99=4952.292 max=10656.958 us
+Process and encode: mean=2.434 p50=0.875 p99=12.166 max=68.833 us
+Reply offer: mean=1.682 p50=0.625 p99=9.667 max=28.125 us
+Server total: mean=3833.813 p50=3969.292 p99=4960.958 max=10663.750 us

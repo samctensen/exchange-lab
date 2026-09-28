@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.agrona.ErrorHandler;
 import org.agrona.concurrent.AgentRunner;
 import org.agrona.concurrent.BusySpinIdleStrategy;
+import org.agrona.concurrent.SystemNanoClock;
 
 import io.aeron.Aeron;
 import io.aeron.Publication;
@@ -22,13 +23,21 @@ public class AeronEngineServer {
 
     String archiveArgument = null;
     boolean quiet = false;
+    EngineStageTimings stageTimings = null;
     for (String arg : args) {
       if ("--quiet".equals(arg)) {
         quiet = true;
+      } else if (arg.startsWith("--stage-timing=") && stageTimings == null) {
+        String[] counts = arg.substring("--stage-timing=".length()).split(",", -1);
+        if (counts.length != 2) {
+          throw new IllegalArgumentException("Usage: --stage-timing=warmupCount,sampleCount");
+        }
+        stageTimings = new EngineStageTimings(Integer.parseInt(counts[0]), Integer.parseInt(counts[1]));
       } else if (archiveArgument == null && !arg.startsWith("--")) {
         archiveArgument = arg;
       } else {
-        throw new IllegalArgumentException("Usage: AeronEngineServer [archiveDirectory] [--quiet]");
+        throw new IllegalArgumentException(
+            "Usage: AeronEngineServer [archiveDirectory] [--quiet] [--stage-timing=warmupCount,sampleCount]");
       }
     }
 
@@ -68,8 +77,8 @@ public class AeronEngineServer {
         Subscription subscription = aeron.addSubscription("aeron:ipc", 1);
         Publication replies = aeron.addPublication("aeron:ipc", 2);
         // Busy spinning keeps polling for requests; budget a dedicated core for this runner.
-        AgentRunner runner = new AgentRunner(new BusySpinIdleStrategy(), errorHandler, null,
-            new AeronEngineAgent(subscription, replies, stateMachine, requestLog, !quiet))) {
+        AgentRunner runner = new AgentRunner(new BusySpinIdleStrategy(), errorHandler, null, new AeronEngineAgent(
+            subscription, replies, stateMachine, requestLog, !quiet, SystemNanoClock.INSTANCE, stageTimings))) {
 
       AgentRunner.startOnThread(runner);
 
@@ -81,6 +90,11 @@ public class AeronEngineServer {
       // The runner processes requests. Main waits here to keep resources open.
       while (!shutdownRequested.get() && !runner.isClosed()) {
         Thread.sleep(10);
+      }
+    } finally {
+      // Resource closure has stopped the writer before main reads its samples.
+      if (stageTimings != null) {
+        System.out.print(stageTimings.summarize());
       }
     }
     Throwable failure = agentFailure.get();

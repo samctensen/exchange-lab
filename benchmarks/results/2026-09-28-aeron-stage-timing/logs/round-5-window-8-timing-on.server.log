@@ -1,0 +1,10 @@
+Server ready: /private/tmp/exchange-stage-measure-zr4lhhnu/exchange-lab-aeron
+Archive: /private/tmp/exchange-stage-measure-zr4lhhnu/archive
+Request recording: 0
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=1.033 p50=0.541 p99=8.917 max=39.834 us
+Recording observation: mean=7911.021 p50=7983.250 p99=8965.834 max=9025.291 us
+Process and encode: mean=0.385 p50=0.166 p99=3.500 max=56.958 us
+Reply offer: mean=0.303 p50=0.125 p99=2.666 max=22.875 us
+Server total: mean=7912.743 p50=7984.958 p99=8968.875 max=9028.333 us
