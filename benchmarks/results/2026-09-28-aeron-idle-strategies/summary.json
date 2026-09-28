@@ -1,0 +1,378 @@
+{
+  "groups": [
+    {
+      "window": 1,
+      "mode": "sleep",
+      "runs": 5,
+      "throughput_rps": {
+        "median": 300.669,
+        "min": 260.935,
+        "max": 304.517
+      },
+      "p50_us": {
+        "median": 3038.916,
+        "min": 3029.0,
+        "max": 3977.542
+      },
+      "p99_us": {
+        "median": 4081.708,
+        "min": 4060.875,
+        "max": 4111.25
+      },
+      "max_us": {
+        "median": 10591.458,
+        "min": 9649.125,
+        "max": 10708.5
+      },
+      "client_thread_cpu_pct": {
+        "median": 50.68,
+        "min": 49.98,
+        "max": 50.796
+      },
+      "client_jvm_cpu_pct": {
+        "median": 52.162,
+        "min": 51.265,
+        "max": 52.186
+      },
+      "client_jvm_cpu_us_per_request": {
+        "median": 1735.6628052775645,
+        "min": 1689.2652955335827,
+        "max": 1964.665529729626
+      }
+    },
+    {
+      "window": 1,
+      "mode": "spin",
+      "runs": 5,
+      "throughput_rps": {
+        "median": 301.807,
+        "min": 281.777,
+        "max": 304.603
+      },
+      "p50_us": {
+        "median": 3030.209,
+        "min": 3028.25,
+        "max": 3886.666
+      },
+      "p99_us": {
+        "median": 4905.0,
+        "min": 4877.958,
+        "max": 4949.875
+      },
+      "max_us": {
+        "median": 10619.834,
+        "min": 10564.833,
+        "max": 10981.459
+      },
+      "client_thread_cpu_pct": {
+        "median": 99.18,
+        "min": 98.833,
+        "max": 99.456
+      },
+      "client_jvm_cpu_pct": {
+        "median": 102.718,
+        "min": 102.227,
+        "max": 103.201
+      },
+      "client_jvm_cpu_us_per_request": {
+        "median": 3403.4333199693842,
+        "min": 3358.0577026045994,
+        "max": 3662.506166223645
+      }
+    },
+    {
+      "window": 2,
+      "mode": "sleep",
+      "runs": 5,
+      "throughput_rps": {
+        "median": 295.693,
+        "min": 270.242,
+        "max": 306.965
+      },
+      "p50_us": {
+        "median": 6948.875,
+        "min": 6082.209,
+        "max": 7101.75
+      },
+      "p99_us": {
+        "median": 8095.458,
+        "min": 8078.583,
+        "max": 8995.542
+      },
+      "max_us": {
+        "median": 14590.667,
+        "min": 13932.583,
+        "max": 15005.167
+      },
+      "client_thread_cpu_pct": {
+        "median": 50.683,
+        "min": 49.526,
+        "max": 50.858
+      },
+      "client_jvm_cpu_pct": {
+        "median": 52.08,
+        "min": 50.816,
+        "max": 52.218
+      },
+      "client_jvm_cpu_us_per_request": {
+        "median": 1765.9532014623278,
+        "min": 1700.4870262081997,
+        "max": 1880.3886886568334
+      }
+    },
+    {
+      "window": 2,
+      "mode": "spin",
+      "runs": 5,
+      "throughput_rps": {
+        "median": 300.672,
+        "min": 262.784,
+        "max": 309.27
+      },
+      "p50_us": {
+        "median": 6944.333,
+        "min": 6044.917,
+        "max": 7952.542
+      },
+      "p99_us": {
+        "median": 8959.833,
+        "min": 8047.458,
+        "max": 12942.333
+      },
+      "max_us": {
+        "median": 16095.167,
+        "min": 13979.75,
+        "max": 21180.333
+      },
+      "client_thread_cpu_pct": {
+        "median": 99.283,
+        "min": 98.722,
+        "max": 99.348
+      },
+      "client_jvm_cpu_pct": {
+        "median": 102.053,
+        "min": 101.745,
+        "max": 102.432
+      },
+      "client_jvm_cpu_us_per_request": {
+        "median": 3394.1637398893145,
+        "min": 3296.763345943674,
+        "max": 3897.9542133463224
+      }
+    },
+    {
+      "window": 4,
+      "mode": "sleep",
+      "runs": 5,
+      "throughput_rps": {
+        "median": 598.322,
+        "min": 556.531,
+        "max": 611.862
+      },
+      "p50_us": {
+        "median": 6864.583,
+        "min": 6081.875,
+        "max": 7005.791
+      },
+      "p99_us": {
+        "median": 8080.125,
+        "min": 8028.375,
+        "max": 11943.083
+      },
+      "max_us": {
+        "median": 13555.125,
+        "min": 12983.375,
+        "max": 14683.375
+      },
+      "client_thread_cpu_pct": {
+        "median": 50.541,
+        "min": 49.779,
+        "max": 51.074
+      },
+      "client_jvm_cpu_pct": {
+        "median": 52.998,
+        "min": 51.138,
+        "max": 53.838
+      },
+      "client_jvm_cpu_us_per_request": {
+        "median": 869.4147967148124,
+        "min": 855.9735531656694,
+        "max": 967.3854646012533
+      }
+    },
+    {
+      "window": 4,
+      "mode": "spin",
+      "runs": 5,
+      "throughput_rps": {
+        "median": 602.456,
+        "min": 516.964,
+        "max": 620.247
+      },
+      "p50_us": {
+        "median": 6912.166,
+        "min": 6060.833,
+        "max": 7967.584
+      },
+      "p99_us": {
+        "median": 8077.458,
+        "min": 8033.5,
+        "max": 10002.333
+      },
+      "max_us": {
+        "median": 14043.667,
+        "min": 13301.708,
+        "max": 14994.125
+      },
+      "client_thread_cpu_pct": {
+        "median": 99.395,
+        "min": 98.733,
+        "max": 99.441
+      },
+      "client_jvm_cpu_pct": {
+        "median": 103.106,
+        "min": 102.674,
+        "max": 104.062
+      },
+      "client_jvm_cpu_us_per_request": {
+        "median": 1725.3542167394794,
+        "min": 1670.7474174599959,
+        "max": 1992.8273535487963
+      }
+    },
+    {
+      "window": 8,
+      "mode": "sleep",
+      "runs": 5,
+      "throughput_rps": {
+        "median": 1131.959,
+        "min": 1112.525,
+        "max": 1169.064
+      },
+      "p50_us": {
+        "median": 6998.792,
+        "min": 6969.708,
+        "max": 7024.5
+      },
+      "p99_us": {
+        "median": 8187.541,
+        "min": 8059.458,
+        "max": 8929.167
+      },
+      "max_us": {
+        "median": 12974.25,
+        "min": 8984.541,
+        "max": 15080.458
+      },
+      "client_thread_cpu_pct": {
+        "median": 50.631,
+        "min": 50.301,
+        "max": 50.867
+      },
+      "client_jvm_cpu_pct": {
+        "median": 56.078,
+        "min": 53.777,
+        "max": 57.32
+      },
+      "client_jvm_cpu_us_per_request": {
+        "median": 491.41367609716633,
+        "min": 467.5447748217701,
+        "max": 508.06324376931167
+      }
+    },
+    {
+      "window": 8,
+      "mode": "spin",
+      "runs": 5,
+      "throughput_rps": {
+        "median": 1105.108,
+        "min": 1052.17,
+        "max": 1201.373
+      },
+      "p50_us": {
+        "median": 7006.708,
+        "min": 6905.0,
+        "max": 7935.0
+      },
+      "p99_us": {
+        "median": 9833.542,
+        "min": 8048.083,
+        "max": 12139.834
+      },
+      "max_us": {
+        "median": 11161.75,
+        "min": 9006.584,
+        "max": 15435.417
+      },
+      "client_thread_cpu_pct": {
+        "median": 99.295,
+        "min": 98.577,
+        "max": 99.414
+      },
+      "client_jvm_cpu_pct": {
+        "median": 106.448,
+        "min": 106.265,
+        "max": 107.677
+      },
+      "client_jvm_cpu_us_per_request": {
+        "median": 963.6162257444522,
+        "min": 890.1663188092397,
+        "max": 1009.9603676212018
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "window": 1,
+      "throughput_spin_over_sleep_ratio_of_medians": 1.0037848930218947,
+      "paired_round_throughput_ratios": [
+        1.079874298196869,
+        1.0803861828267816,
+        0.9686655541621819,
+        1.0037848930218947,
+        0.999691314442215
+      ],
+      "paired_round_throughput_ratio_median": 1.0037848930218947,
+      "rounds_spin_had_higher_throughput": 3
+    },
+    {
+      "window": 2,
+      "throughput_spin_over_sleep_ratio_of_medians": 1.0168384101077808,
+      "paired_round_throughput_ratios": [
+        0.9724025133028914,
+        0.9100993259901318,
+        1.07035374445105,
+        1.0031925463815095,
+        1.0290751068105892
+      ],
+      "paired_round_throughput_ratio_median": 1.0031925463815095,
+      "rounds_spin_had_higher_throughput": 3
+    },
+    {
+      "window": 4,
+      "throughput_spin_over_sleep_ratio_of_medians": 1.006909323073529,
+      "paired_round_throughput_ratios": [
+        0.8653203330962047,
+        0.9873250546690122,
+        1.020149803617129,
+        1.006909323073529,
+        1.0086016127819672
+      ],
+      "paired_round_throughput_ratio_median": 1.006909323073529,
+      "rounds_spin_had_higher_throughput": 3
+    },
+    {
+      "window": 8,
+      "throughput_spin_over_sleep_ratio_of_medians": 0.9762791761892435,
+      "paired_round_throughput_ratios": [
+        0.9933331835239656,
+        1.044490523387237,
+        0.9000106067760191,
+        1.0556336404410407,
+        0.9786031983520741
+      ],
+      "paired_round_throughput_ratio_median": 0.9933331835239656,
+      "rounds_spin_had_higher_throughput": 2
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+Warmup: 500 requests
+Attempts per request: 1
+Max in flight: 8
+Samples: 2000 requests
+Round-trip latency (microseconds):
+p50: 7994.708 us
+p99: 9187.083 us
+max: 15015.417 us
+Throughput: 992.536 requests/s
