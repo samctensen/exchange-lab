@@ -3,12 +3,20 @@ package dev.sam.exchange.transport;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
+
+import org.agrona.ExpandableArrayBuffer;
+import org.agrona.concurrent.IdleStrategy;
+import org.agrona.concurrent.NanoClock;
+import org.agrona.concurrent.SleepingIdleStrategy;
+import org.agrona.concurrent.SystemNanoClock;
 
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.CancelResult;
-import dev.sam.exchange.engine.CommandResult;
+import dev.sam.exchange.protocol.SbeRequestCodec;
 import io.aeron.Aeron;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -18,19 +26,27 @@ public class AeronLatencyBenchmark {
   private static final int DEFAULT_SAMPLE_COUNT = 2_000;
   private static final CancelResult EXPECTED_RESULT = new CancelResult(1L, false);
 
+  record Measurement(long[] latencies, long elapsedNanos) {
+  }
+
+  private record PendingSample(int index, UUID requestId, long startedNanos, long deadlineNanos) {
+  }
+
   public static void main(String[] args) {
-    if (args.length > 2) {
-      throw new IllegalArgumentException("Usage: AeronLatencyBenchmark [warmupCount] [sampleCount]");
+    if (args.length > 3) {
+      throw new IllegalArgumentException("Usage: AeronLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight]");
     }
     int warmupCount = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_WARMUP_COUNT;
     int sampleCount = args.length > 1 ? Integer.parseInt(args[1]) : DEFAULT_SAMPLE_COUNT;
-    if (warmupCount < 0 || sampleCount < 1) {
-      throw new IllegalArgumentException("Warmup count must be non-negative and sample count must be positive");
+    int maxInFlight = args.length > 2 ? Integer.parseInt(args[2]) : 1;
+    if (warmupCount < 0 || sampleCount < 1 || maxInFlight < 1) {
+      throw new IllegalArgumentException(
+          "Warmup count must be non-negative; sample count and max in flight must be positive");
     }
 
     // Use a separate server with a fresh archive directory and --quiet for a comparable baseline.
     String aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
-    long[] latencies = new long[sampleCount];
+    Measurement measured;
     try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectory));
         Publication publication = aeron.addPublication("aeron:ipc", 1);
         Subscription replies = aeron.addSubscription("aeron:ipc", 2)) {
@@ -38,33 +54,94 @@ public class AeronLatencyBenchmark {
       AeronRequestClient client = new AeronRequestClient(publication, replies,
           new ClientConfig(Duration.ofSeconds(5), 1));
 
-      for (int i = 0; i < warmupCount; i++) {
-        sendTimedRequest(client);
-      }
-      for (int i = 0; i < sampleCount; i++) {
-        latencies[i] = sendTimedRequest(client);
-      }
+      IdleStrategy idle = new SleepingIdleStrategy();
+      // Drain all warmup replies before starting the measured phase.
+      measure(client, warmupCount, maxInFlight, SystemNanoClock.INSTANCE, idle);
+      measured = measure(client, sampleCount, maxInFlight, SystemNanoClock.INSTANCE, idle);
     }
 
     // Sorting and console output happen after every measured request has completed successfully.
     System.out.println("Warmup: " + warmupCount + " requests");
     System.out.println("Attempts per request: 1");
-    System.out.print(summarize(latencies));
+    System.out.println("Max in flight: " + maxInFlight);
+    System.out.print(summarize(measured.latencies(), measured.elapsedNanos()));
   }
 
-  private static long sendTimedRequest(AeronRequestClient client) {
-    // A new UUID exercises the recording path and engine instead of the server's response cache.
-    // Request construction is outside the timer; the timer covers send() through its matching reply.
-    CommandRequest request = new CommandRequest(UUID.randomUUID(), new CancelOrder(1L));
-    long started = System.nanoTime();
-    CommandResult result = client.send(request);
-    long elapsed = System.nanoTime() - started;
+  static Measurement measure(AeronRequestClient client, int count, int maxInFlight, NanoClock clock,
+      IdleStrategy idle) {
+    long[] latencies = new long[count];
+    Map<UUID, PendingSample> inFlight = new LinkedHashMap<>();
+    SbeRequestCodec codec = new SbeRequestCodec();
+    ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(64);
+    long timeoutNanos = client.config().timeout().toNanos();
+    PendingSample pendingOffer = null;
+    int encodedLength = 0;
+    int sent = 0;
+    long runStarted = clock.nanoTime();
 
-    if (!EXPECTED_RESULT.equals(result)) {
-      throw new IllegalStateException("Unexpected benchmark response for request " + request.requestId() + ": " + result
-          + "; use a fresh, empty benchmark archive directory");
+    while (sent < count || !inFlight.isEmpty()) {
+      int work = 0;
+      while (sent < count && inFlight.size() < maxInFlight) {
+        if (pendingOffer == null) {
+          // Fresh UUIDs exercise recording rather than the response cache. Construction is outside the latency timer.
+          CommandRequest request = new CommandRequest(UUID.randomUUID(), new CancelOrder(1L));
+          long started = clock.nanoTime();
+          pendingOffer = new PendingSample(sent, request.requestId(), started, started + timeoutNanos);
+          encodedLength = codec.encode(request, buffer, 0);
+        }
+
+        long result = client.trySend(buffer, 0, encodedLength);
+        if (result < 0) {
+          if (result == Publication.CLOSED || result == Publication.MAX_POSITION_EXCEEDED) {
+            throw new IllegalStateException(
+                "Request publication failed for " + pendingOffer.requestId() + "; offer result: " + result);
+          }
+          if (clock.nanoTime() - pendingOffer.deadlineNanos() >= 0) {
+            throw new IllegalStateException(
+                "Timed out sending request " + pendingOffer.requestId() + "; last offer result: " + result);
+          }
+          // Keep these bytes and their original timer, but still poll replies while back pressured.
+          break;
+        }
+
+        inFlight.put(pendingOffer.requestId(), new PendingSample(pendingOffer.index(), pendingOffer.requestId(),
+            pendingOffer.startedNanos(), clock.nanoTime() + timeoutNanos));
+        pendingOffer = null;
+        sent++;
+        work++;
+      }
+
+      work += client.pollResponses(response -> {
+        PendingSample sample = inFlight.remove(response.requestId());
+        // Streams can carry unrelated or duplicate replies; only an active UUID can complete a sample.
+        if (sample == null)
+          return;
+        long elapsed = clock.nanoTime() - sample.startedNanos();
+        if (!EXPECTED_RESULT.equals(response.result())) {
+          throw new IllegalStateException("Unexpected benchmark response for request " + response.requestId() + ": "
+              + response.result() + "; use a fresh, empty benchmark archive directory");
+        }
+        latencies[sample.index()] = elapsed;
+      }, Math.min(maxInFlight, 10));
+
+      long now = clock.nanoTime();
+      for (PendingSample sample : inFlight.values()) {
+        if (now - sample.deadlineNanos() >= 0) {
+          throw new IllegalStateException(
+              "No reply after 1 attempts for request " + sample.requestId() + "; outcome unknown");
+        }
+      }
+      idle.idle(work);
     }
-    return elapsed;
+    return new Measurement(latencies, clock.nanoTime() - runStarted);
+  }
+
+  static String summarize(long[] latencies, long elapsedNanos) {
+    if (elapsedNanos <= 0)
+      throw new IllegalArgumentException("Measured duration must be positive");
+    // Latencies overlap when pipelining. Throughput uses elapsed time for the entire measured phase.
+    return summarize(latencies) + String.format(Locale.ROOT, "Throughput: %.3f requests/s%n",
+        latencies.length * 1_000_000_000.0 / elapsedNanos);
   }
 
   static String summarize(long[] latencies) {

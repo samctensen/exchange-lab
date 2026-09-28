@@ -34,9 +34,9 @@ import io.aeron.driver.MediaDriver;
 @Timeout(20)
 class AeronLatencyBenchmarkTest {
   @ParameterizedTest
-  @CsvSource({"0, 1", "5, 12"})
-  void measuresFreshRequestsAfterWarmupAgainstAQuietServer(int warmup, int samples, @TempDir Path tempDir)
-      throws Exception {
+  @CsvSource({"0, 1, 1", "5, 12, 2", "5, 13, 4", "5, 19, 8", "0, 3, 16"})
+  void measuresFreshRequestsAfterWarmupAgainstAQuietServer(int warmup, int samples, int maxInFlight,
+      @TempDir Path tempDir) throws Exception {
     Path archiveDirectory = tempDir.resolve("benchmark-archive");
     Path serverLog = tempDir.resolve("server.log");
     Path benchmarkLog = tempDir.resolve("benchmark.log");
@@ -45,14 +45,20 @@ class AeronLatencyBenchmarkTest {
     Process benchmark = null;
     try {
       awaitOutput(server, serverLog, "Server ready:");
-      benchmark = startMain(tempDir, benchmarkLog, AeronLatencyBenchmark.class, Integer.toString(warmup),
-          Integer.toString(samples));
+      String[] arguments = maxInFlight == 1
+          ? new String[]{Integer.toString(warmup), Integer.toString(samples)}
+          : new String[]{Integer.toString(warmup), Integer.toString(samples), Integer.toString(maxInFlight)};
+      benchmark = startMain(tempDir, benchmarkLog, AeronLatencyBenchmark.class, arguments);
       assertTrue(benchmark.waitFor(10, TimeUnit.SECONDS), "Benchmark did not finish");
       String report = Files.readString(benchmarkLog);
       assertEquals(0, benchmark.exitValue(), report);
       assertTrue(report.contains("Warmup: " + warmup + " requests"), report);
       assertTrue(report.contains("Samples: " + samples + " requests"), report);
       assertTrue(report.contains("Attempts per request: 1"), report);
+      assertTrue(report.contains("Max in flight: " + maxInFlight), report);
+      Matcher throughput = Pattern.compile("(?m)^Throughput: ([0-9]+\\.[0-9]{3}) requests/s$").matcher(report);
+      assertTrue(throughput.find(), report);
+      assertTrue(Double.parseDouble(throughput.group(1)) > 0, report);
       double p50 = metric(report, "p50");
       double p99 = metric(report, "p99");
       double max = metric(report, "max");
@@ -107,8 +113,10 @@ class AeronLatencyBenchmarkTest {
     }
   }
 
-  @Test
-  void stopsAfterOneUnansweredAttemptWithoutPrintingPartialStatistics(@TempDir Path tempDir) throws Exception {
+  @ParameterizedTest
+  @CsvSource({"1", "4"})
+  void stopsAfterOneUnansweredAttemptWithoutPrintingPartialStatistics(int maxInFlight, @TempDir Path tempDir)
+      throws Exception {
     ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
     Path log = tempDir.resolve("benchmark.log");
     try (
@@ -118,7 +126,7 @@ class AeronLatencyBenchmarkTest {
         Aeron aeron = Aeron
             .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
         Subscription commands = aeron.addSubscription("aeron:ipc", 1)) {
-      Process benchmark = startMain(tempDir, log, AeronLatencyBenchmark.class, "0", "2");
+      Process benchmark = startMain(tempDir, log, AeronLatencyBenchmark.class, "0", "6", Integer.toString(maxInFlight));
       List<CommandRequest> received = new ArrayList<>();
       SbeRequestCodec codec = new SbeRequestCodec();
       SleepingIdleStrategy idle = new SleepingIdleStrategy();
@@ -132,12 +140,14 @@ class AeronLatencyBenchmarkTest {
         }
         String output = Files.readString(log);
         assertTrue(benchmark.exitValue() != 0, output);
-        assertEquals(1, received.size(), "Only one attempt of the first sample may be sent");
-        assertEquals(new CancelOrder(1L), received.getFirst().command());
+        assertEquals(maxInFlight, received.size(), "Only the initial window may be sent without replies");
+        assertEquals((long) maxInFlight, received.stream().map(CommandRequest::requestId).distinct().count());
+        assertTrue(received.stream().allMatch(request -> request.command().equals(new CancelOrder(1L))));
         assertTrue(output.contains("No reply after 1 attempts"), output);
         assertTrue(output.contains(received.getFirst().requestId().toString()), output);
         assertFalse(output.contains("p50:"),
             "A failed run must not publish statistics over partial samples\n" + output);
+        assertFalse(output.contains("Throughput:"), output);
         assertTrue(errors.isEmpty(), errors::toString);
       } finally {
         stopIfAlive(benchmark);
@@ -186,7 +196,14 @@ class AeronLatencyBenchmarkTest {
 
   @Test
   void rejectsExtraArgumentsBeforeConnecting() {
-    assertThrows(IllegalArgumentException.class, () -> AeronLatencyBenchmark.main(new String[]{"0", "1", "extra"}));
+    assertThrows(IllegalArgumentException.class,
+        () -> AeronLatencyBenchmark.main(new String[]{"0", "1", "1", "extra"}));
+  }
+
+  @ParameterizedTest
+  @CsvSource({"0", "-1", "oops"})
+  void rejectsInvalidWindowBeforeConnecting(String maxInFlight) {
+    assertThrows(IllegalArgumentException.class, () -> AeronLatencyBenchmark.main(new String[]{"0", "1", maxInFlight}));
   }
 
   private static double metric(String report, String name) {
