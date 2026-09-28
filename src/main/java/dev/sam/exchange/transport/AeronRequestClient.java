@@ -2,7 +2,9 @@ package dev.sam.exchange.transport;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
+import org.agrona.DirectBuffer;
 import org.agrona.ExpandableArrayBuffer;
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.SleepingIdleStrategy;
@@ -31,6 +33,7 @@ public class AeronRequestClient {
   private final Subscription replies;
   private final long timeoutNanos;
   private final int maxAttempts;
+  private final ClientConfig config;
 
   public AeronRequestClient(Publication publication, Subscription replies) {
     this(publication, replies, ClientConfig.defaults());
@@ -41,10 +44,14 @@ public class AeronRequestClient {
     this.replies = replies;
     this.timeoutNanos = config.timeout().toNanos();
     this.maxAttempts = config.maxAttempts();
+    this.config = config;
+  }
+
+  public ClientConfig config() {
+    return config;
   }
 
   public CommandResult send(CommandRequest request) {
-
     int messageLength = requestCodec.encode(request, buffer, 0);
     List<CommandResult> matchingResults = new ArrayList<>(1);
     for (int attempt = 1; attempt <= this.maxAttempts && matchingResults.isEmpty(); attempt++) {
@@ -57,7 +64,7 @@ public class AeronRequestClient {
 
       // Retry temporary offer failures until the send deadline.
       // A successful offer queues bytes; the server may not have processed the order yet.
-      while ((offerResult = publication.offer(buffer, 0, messageLength)) < 0) {
+      while ((offerResult = trySend(buffer, 0, messageLength)) < 0) {
         // These failures cannot be resolved by retrying.
         if (offerResult == Publication.CLOSED) {
           throw new IllegalStateException("Publication is closed" + failureContext);
@@ -78,15 +85,11 @@ public class AeronRequestClient {
       deadline = System.nanoTime() + this.timeoutNanos;
 
       while (matchingResults.isEmpty()) {
-        int fragments = replies.poll(replyAssembler, 1);
-
-        // Here, both the current request and complete responses are available.
-        for (CommandResponse response : receivedResponses) {
+        int fragments = pollResponses(response -> {
           if (request.requestId().equals(response.requestId())) {
             matchingResults.add(response.result());
           }
-        }
-        receivedResponses.clear();
+        }, 1);
 
         if (matchingResults.isEmpty() && System.nanoTime() - deadline >= 0) {
           break;
@@ -100,5 +103,18 @@ public class AeronRequestClient {
           "No reply after " + this.maxAttempts + " attempts for request " + request.requestId() + "; outcome unknown");
     }
     return matchingResults.getFirst();
+  }
+
+  public long trySend(DirectBuffer encodedRequest, int offset, int length) {
+    return publication.offer(encodedRequest, offset, length);
+  }
+
+  public int pollResponses(Consumer<CommandResponse> onResponse, int fragmentLimit) {
+    int fragments = replies.poll(replyAssembler, fragmentLimit);
+    for (CommandResponse response : receivedResponses) {
+      onResponse.accept(response);
+    }
+    receivedResponses.clear();
+    return fragments;
   }
 }
