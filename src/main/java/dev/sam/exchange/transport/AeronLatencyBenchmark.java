@@ -1,5 +1,7 @@
 package dev.sam.exchange.transport;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadMXBean;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
@@ -9,6 +11,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import org.agrona.ExpandableArrayBuffer;
+import org.agrona.concurrent.BusySpinIdleStrategy;
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.NanoClock;
 import org.agrona.concurrent.SleepingIdleStrategy;
@@ -26,15 +29,16 @@ public class AeronLatencyBenchmark {
   private static final int DEFAULT_SAMPLE_COUNT = 2_000;
   private static final CancelResult EXPECTED_RESULT = new CancelResult(1L, false);
 
-  record Measurement(long[] latencies, long elapsedNanos) {
+  record Measurement(long[] latencies, long elapsedNanos, long threadCpuNanos, long processCpuNanos) {
   }
 
   private record PendingSample(int index, UUID requestId, long startedNanos, long deadlineNanos) {
   }
 
   public static void main(String[] args) {
-    if (args.length > 3) {
-      throw new IllegalArgumentException("Usage: AeronLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight]");
+    if (args.length > 4) {
+      throw new IllegalArgumentException(
+          "Usage: AeronLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight] [sleep|spin]");
     }
     int warmupCount = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_WARMUP_COUNT;
     int sampleCount = args.length > 1 ? Integer.parseInt(args[1]) : DEFAULT_SAMPLE_COUNT;
@@ -43,6 +47,8 @@ public class AeronLatencyBenchmark {
       throw new IllegalArgumentException(
           "Warmup count must be non-negative; sample count and max in flight must be positive");
     }
+    String idleMode = args.length > 3 ? args[3] : "sleep";
+    IdleStrategy idle = idleStrategy(idleMode);
 
     // Use a separate server with a fresh archive directory and --quiet for a comparable baseline.
     String aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
@@ -54,7 +60,6 @@ public class AeronLatencyBenchmark {
       AeronRequestClient client = new AeronRequestClient(publication, replies,
           new ClientConfig(Duration.ofSeconds(5), 1));
 
-      IdleStrategy idle = new SleepingIdleStrategy();
       // Drain all warmup replies before starting the measured phase.
       measure(client, warmupCount, maxInFlight, SystemNanoClock.INSTANCE, idle);
       measured = measure(client, sampleCount, maxInFlight, SystemNanoClock.INSTANCE, idle);
@@ -64,7 +69,16 @@ public class AeronLatencyBenchmark {
     System.out.println("Warmup: " + warmupCount + " requests");
     System.out.println("Attempts per request: 1");
     System.out.println("Max in flight: " + maxInFlight);
-    System.out.print(summarize(measured.latencies(), measured.elapsedNanos()));
+    System.out.println("Client idle strategy: " + idleMode);
+    System.out.print(summarize(measured));
+  }
+
+  static IdleStrategy idleStrategy(String mode) {
+    return switch (mode) {
+      case "sleep" -> new SleepingIdleStrategy();
+      case "spin" -> new BusySpinIdleStrategy();
+      default -> throw new IllegalArgumentException("Client idle strategy must be sleep or spin: " + mode);
+    };
   }
 
   static Measurement measure(AeronRequestClient client, int count, int maxInFlight, NanoClock clock,
@@ -77,6 +91,15 @@ public class AeronLatencyBenchmark {
     PendingSample pendingOffer = null;
     int encodedLength = 0;
     int sent = 0;
+    ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+    var os = ManagementFactory.getOperatingSystemMXBean();
+    // Sample CPU counters only at phase boundaries, outside the latency/throughput timers.
+    long processCpuStarted = os instanceof com.sun.management.OperatingSystemMXBean extended
+        ? extended.getProcessCpuTime()
+        : -1;
+    long threadCpuStarted = threads.isCurrentThreadCpuTimeSupported() && threads.isThreadCpuTimeEnabled()
+        ? threads.getCurrentThreadCpuTime()
+        : -1;
     long runStarted = clock.nanoTime();
 
     while (sent < count || !inFlight.isEmpty()) {
@@ -133,7 +156,30 @@ public class AeronLatencyBenchmark {
       }
       idle.idle(work);
     }
-    return new Measurement(latencies, clock.nanoTime() - runStarted);
+    long elapsed = clock.nanoTime() - runStarted;
+    long threadCpuEnded = threadCpuStarted >= 0 ? threads.getCurrentThreadCpuTime() : -1;
+    long processCpuEnded = os instanceof com.sun.management.OperatingSystemMXBean extended
+        ? extended.getProcessCpuTime()
+        : -1;
+    return new Measurement(latencies, elapsed, cpuDelta(threadCpuStarted, threadCpuEnded),
+        cpuDelta(processCpuStarted, processCpuEnded));
+  }
+
+  private static long cpuDelta(long started, long ended) {
+    return started < 0 || ended < started ? -1 : ended - started;
+  }
+
+  static String summarize(Measurement measured) {
+    return summarize(measured.latencies(), measured.elapsedNanos())
+        + cpuUsage("Client thread CPU", measured.threadCpuNanos(), measured.elapsedNanos())
+        + cpuUsage("Client JVM CPU", measured.processCpuNanos(), measured.elapsedNanos());
+  }
+
+  private static String cpuUsage(String label, long cpuNanos, long elapsedNanos) {
+    // 100% is one fully occupied core. The JVM total includes other threads and can exceed 100%.
+    return cpuNanos < 0
+        ? label + ": unavailable" + System.lineSeparator()
+        : String.format(Locale.ROOT, "%s: %.3f%%%n", label, 100.0 * cpuNanos / elapsedNanos);
   }
 
   static String summarize(long[] latencies, long elapsedNanos) {

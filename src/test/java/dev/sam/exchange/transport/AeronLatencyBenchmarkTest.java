@@ -2,6 +2,7 @@ package dev.sam.exchange.transport;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -17,6 +18,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.agrona.concurrent.SleepingIdleStrategy;
+import org.agrona.concurrent.BusySpinIdleStrategy;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -34,8 +36,9 @@ import io.aeron.driver.MediaDriver;
 @Timeout(20)
 class AeronLatencyBenchmarkTest {
   @ParameterizedTest
-  @CsvSource({"0, 1, 1", "5, 12, 2", "5, 13, 4", "5, 19, 8", "0, 3, 16"})
-  void measuresFreshRequestsAfterWarmupAgainstAQuietServer(int warmup, int samples, int maxInFlight,
+  @CsvSource({"0, 1, 1, sleep", "5, 12, 2, sleep", "5, 13, 4, sleep", "5, 19, 8, sleep", "0, 3, 16, sleep",
+      "0, 1, 1, spin", "5, 19, 8, spin"})
+  void measuresFreshRequestsAfterWarmupAgainstAQuietServer(int warmup, int samples, int maxInFlight, String idleMode,
       @TempDir Path tempDir) throws Exception {
     Path archiveDirectory = tempDir.resolve("benchmark-archive");
     Path serverLog = tempDir.resolve("server.log");
@@ -45,9 +48,9 @@ class AeronLatencyBenchmarkTest {
     Process benchmark = null;
     try {
       awaitOutput(server, serverLog, "Server ready:");
-      String[] arguments = maxInFlight == 1
+      String[] arguments = maxInFlight == 1 && idleMode.equals("sleep")
           ? new String[]{Integer.toString(warmup), Integer.toString(samples)}
-          : new String[]{Integer.toString(warmup), Integer.toString(samples), Integer.toString(maxInFlight)};
+          : new String[]{Integer.toString(warmup), Integer.toString(samples), Integer.toString(maxInFlight), idleMode};
       benchmark = startMain(tempDir, benchmarkLog, AeronLatencyBenchmark.class, arguments);
       assertTrue(benchmark.waitFor(10, TimeUnit.SECONDS), "Benchmark did not finish");
       String report = Files.readString(benchmarkLog);
@@ -56,6 +59,11 @@ class AeronLatencyBenchmarkTest {
       assertTrue(report.contains("Samples: " + samples + " requests"), report);
       assertTrue(report.contains("Attempts per request: 1"), report);
       assertTrue(report.contains("Max in flight: " + maxInFlight), report);
+      assertTrue(report.contains("Client idle strategy: " + idleMode), report);
+      for (String name : List.of("Client thread CPU", "Client JVM CPU")) {
+        Matcher cpu = Pattern.compile("(?m)^" + name + ": (?:[0-9]+\\.[0-9]{3}%|unavailable)$").matcher(report);
+        assertTrue(cpu.find(), report);
+      }
       Matcher throughput = Pattern.compile("(?m)^Throughput: ([0-9]+\\.[0-9]{3}) requests/s$").matcher(report);
       assertTrue(throughput.find(), report);
       assertTrue(Double.parseDouble(throughput.group(1)) > 0, report);
@@ -188,6 +196,28 @@ class AeronLatencyBenchmarkTest {
     assertThrows(IllegalArgumentException.class, () -> AeronLatencyBenchmark.summarize(new long[0]));
   }
 
+  @Test
+  void selectsTheRequestedPollingStrategy() {
+    assertInstanceOf(SleepingIdleStrategy.class, AeronLatencyBenchmark.idleStrategy("sleep"));
+    assertInstanceOf(BusySpinIdleStrategy.class, AeronLatencyBenchmark.idleStrategy("spin"));
+  }
+
+  @Test
+  void reportsCpuTimeRelativeToOneCoreWithoutCappingTheJvmAtOneHundredPercent() {
+    var measured = new AeronLatencyBenchmark.Measurement(new long[]{1_000}, 1_000_000, 250_000, 1_500_000);
+    String report = AeronLatencyBenchmark.summarize(measured);
+    assertTrue(report.contains("Client thread CPU: 25.000%"), report);
+    assertTrue(report.contains("Client JVM CPU: 150.000%"), report);
+  }
+
+  @Test
+  void unavailableCpuCountersAreNotReportedAsZeroUsage() {
+    var measured = new AeronLatencyBenchmark.Measurement(new long[]{1_000}, 1_000_000, -1, -1);
+    String report = AeronLatencyBenchmark.summarize(measured);
+    assertTrue(report.contains("Client thread CPU: unavailable"), report);
+    assertTrue(report.contains("Client JVM CPU: unavailable"), report);
+  }
+
   @ParameterizedTest
   @CsvSource({"-1, 1", "0, 0", "0, -1", "oops, 1"})
   void rejectsInvalidCountsBeforeConnecting(String warmup, String samples) {
@@ -197,7 +227,13 @@ class AeronLatencyBenchmarkTest {
   @Test
   void rejectsExtraArgumentsBeforeConnecting() {
     assertThrows(IllegalArgumentException.class,
-        () -> AeronLatencyBenchmark.main(new String[]{"0", "1", "1", "extra"}));
+        () -> AeronLatencyBenchmark.main(new String[]{"0", "1", "1", "sleep", "extra"}));
+  }
+
+  @Test
+  void rejectsUnknownIdleStrategyBeforeConnecting() {
+    assertThrows(IllegalArgumentException.class,
+        () -> AeronLatencyBenchmark.main(new String[]{"0", "1", "1", "unknown"}));
   }
 
   @ParameterizedTest
