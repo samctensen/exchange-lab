@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
+import org.agrona.DirectBuffer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -28,6 +29,7 @@ import dev.sam.exchange.gateway.proto.SubmitResponse;
 import dev.sam.exchange.transport.AeronRequestClient;
 import dev.sam.exchange.transport.CommandRequest;
 import dev.sam.exchange.transport.RequestStateMachine;
+import io.aeron.Publication;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
@@ -127,9 +129,13 @@ class GrpcExchangeServiceTest {
 
   @Test
   void transportFailureReturnsUnavailableWithSafeRetryInstructions() throws Exception {
-    try (Fixture fixture = new Fixture(request -> {
-      throw new IllegalStateException("No Aeron reply; outcome unknown");
-    }, new GrpcCommandMapper())) {
+    AeronRequestClient client = new ReplyingAeronClient(engine()) {
+      @Override
+      public long trySend(DirectBuffer buffer, int offset, int length) {
+        return Publication.CLOSED;
+      }
+    };
+    try (Fixture fixture = new Fixture(client, new GrpcCommandMapper())) {
       StatusRuntimeException failure = assertThrows(StatusRuntimeException.class, () -> fixture.submit(cancel(1, 101)));
 
       assertEquals(Status.Code.UNAVAILABLE, failure.getStatus().getCode());
@@ -196,12 +202,10 @@ class GrpcExchangeServiceTest {
     }
 
     private Fixture(Function<CommandRequest, CommandResult> send, GrpcCommandMapper mapper) throws Exception {
-      AeronRequestClient client = new AeronRequestClient(null, null) {
-        @Override
-        public CommandResult send(CommandRequest request) {
-          return send.apply(request);
-        }
-      };
+      this(new ReplyingAeronClient(send), mapper);
+    }
+
+    private Fixture(AeronRequestClient client, GrpcCommandMapper mapper) throws Exception {
       gateway = new EngineGateway(client, 8);
       server = ServerBuilder.forPort(0).addService(new GrpcExchangeService(gateway, mapper)).build();
       gateway.start();
