@@ -49,6 +49,71 @@ import io.aeron.driver.MediaDriver;
 @Timeout(15)
 class AeronEngineAgentTest {
   @Test
+  void stageTimingIncludesRetriesAndWaitsButExcludesCachedReplies(@TempDir Path tempDir) throws Exception {
+    EngineStageTimings timings = new EngineStageTimings(0, 2);
+    try (TestServer server = new TestServer(tempDir, 256, timings)) {
+      CommandRequest request = new CommandRequest(new UUID(0, 1), new CancelOrder(1));
+      server.clock.advance(10_000);
+      server.log.backPressure = true;
+      server.log.recordImmediately = false;
+      server.send(request);
+      server.awaitOffered();
+      server.clock.advance(20_000);
+      server.log.backPressure = false;
+      server.awaitAccepted(1);
+      server.clock.advance(30_000);
+      server.log.recordedPosition = 64;
+      server.processor.onProcess = () -> server.clock.advance(40_000);
+      server.awaitProcessed(1);
+      assertTrue(timings.summarize().contains("Stage timing: 0/2 samples"),
+          "An applied command with an unsent reply is not a completed timing sample");
+
+      server.clock.advance(50_000);
+      try (Subscription responses = server.aeron.addSubscription("aeron:ipc", 2)) {
+        awaitConnected(server.replies);
+        server.awaitResponses(responses, 1);
+        String report = timings.summarize();
+        assertTrue(report.contains("Log offer: mean=20.000"), report);
+        assertTrue(report.contains("Recording observation: mean=30.000"), report);
+        assertTrue(report.contains("Process and encode: mean=40.000"), report);
+        assertTrue(report.contains("Reply offer: mean=50.000"), report);
+        assertTrue(report.contains("Server total: mean=140.000"), report);
+
+        server.send(request);
+        server.awaitResponses(responses, 1);
+        assertEquals(report, timings.summarize(), "Cached responses must not count as fresh logged samples");
+      }
+    }
+  }
+
+  @Test
+  void stageTimingPreservesEachQueuedRequestsOwnTimestamps(@TempDir Path tempDir) throws Exception {
+    EngineStageTimings timings = new EngineStageTimings(0, 2);
+    try (TestServer server = new TestServer(tempDir, 256, timings)) {
+      server.log.recordImmediately = false;
+      server.send(new CommandRequest(new UUID(0, 1), new CancelOrder(1)));
+      server.awaitAccepted(1);
+      server.clock.advance(10_000);
+      server.send(new CommandRequest(new UUID(0, 2), new CancelOrder(2)));
+      server.awaitAccepted(2);
+      server.clock.advance(20_000);
+      server.log.recordedPosition = 128;
+      server.awaitProcessed(1);
+      server.clock.advance(40_000);
+      try (Subscription responses = server.aeron.addSubscription("aeron:ipc", 2)) {
+        awaitConnected(server.replies);
+        server.awaitResponses(responses, 2);
+      }
+      String report = timings.summarize();
+      assertTrue(report.contains("Stage timing: 2/2 samples"), report);
+      assertTrue(report.contains("Log offer: mean=0.000"), report);
+      assertTrue(report.contains("Recording observation: mean=45.000 p50=30.000 p99=60.000"), report);
+      assertTrue(report.contains("Reply offer: mean=20.000 p50=0.000 p99=40.000"), report);
+      assertTrue(report.contains("Server total: mean=65.000 p50=60.000 p99=70.000"), report);
+    }
+  }
+
+  @Test
   void retainsPendingReplyWithoutApplyingQueuedRequestsOrAdmittingMore(@TempDir Path tempDir) throws Exception {
     try (TestServer server = new TestServer(tempDir)) {
       assertEquals(0, server.agent.doWork(), "An idle pass must report no work");
@@ -488,6 +553,8 @@ class AeronEngineAgentTest {
   // Keep the real matching engine; record calls so deduplication cannot hide reprocessing.
   private static final class RecordingProcessor extends RequestStateMachine {
     private final List<CommandRequest> processed = new ArrayList<>();
+    private Runnable onProcess = () -> {
+    };
 
     RecordingProcessor(OrderBook book) {
       super(new MatchingEngine(book));
@@ -496,6 +563,7 @@ class AeronEngineAgentTest {
     @Override
     public CommandResponse process(CommandRequest request) {
       processed.add(request);
+      onProcess.run();
       return super.process(request);
     }
   }
@@ -518,6 +586,10 @@ class AeronEngineAgentTest {
     }
 
     TestServer(Path tempDir, int mtuLength) throws IOException {
+      this(tempDir, mtuLength, null);
+    }
+
+    TestServer(Path tempDir, int mtuLength, EngineStageTimings timings) throws IOException {
       processor = new RecordingProcessor(book);
       driver = MediaDriver
           .launchEmbedded(new MediaDriver.Context().aeronDirectoryName(tempDir.resolve("aeron").toString())
@@ -527,7 +599,7 @@ class AeronEngineAgentTest {
       requests = aeron.addSubscription("aeron:ipc", 1);
       replies = aeron.addPublication("aeron:ipc", 2);
       commands = aeron.addPublication("aeron:ipc", 1);
-      agent = new AeronEngineAgent(requests, replies, processor, log, false, clock);
+      agent = new AeronEngineAgent(requests, replies, processor, log, false, clock, timings);
       awaitConnected(commands);
     }
 
