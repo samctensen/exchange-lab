@@ -1,13 +1,22 @@
 package dev.sam.exchange.gateway;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.TimeUnit;
+
+import org.agrona.concurrent.IdleStrategy;
+import org.agrona.concurrent.SleepingIdleStrategy;
 
 import dev.sam.exchange.engine.CommandResult;
+import dev.sam.exchange.protocol.SbeRequestCodec;
 import dev.sam.exchange.transport.AeronRequestClient;
+import dev.sam.exchange.transport.ClientConfig;
 import dev.sam.exchange.transport.CommandRequest;
+import dev.sam.exchange.transport.CommandResponse;
+import io.aeron.Publication;
 
 public class EngineGateway implements AutoCloseable {
   private enum State {
@@ -19,11 +28,22 @@ public class EngineGateway implements AutoCloseable {
   private final ArrayBlockingQueue<PendingRequest> requests;
   private volatile State state = State.NEW;
   private final Object lifecycleLock = new Object();
+  private final Map<UUID, InFlightRequest> inFlight = new LinkedHashMap<>();
+  private final int maxInFlight;
+  private final SbeRequestCodec requestCodec = new SbeRequestCodec();
 
-  public EngineGateway(AeronRequestClient client, int capacity) {
+  public EngineGateway(AeronRequestClient client, int capacity, int maxInFlight) {
+    if (maxInFlight < 1) {
+      throw new IllegalArgumentException("maxInFlight must be at least 1");
+    }
     this.client = client;
     this.requests = new ArrayBlockingQueue<>(capacity);
+    this.maxInFlight = maxInFlight;
     this.worker = new Thread(this::runWorker, "engine-gateway");
+  }
+
+  public EngineGateway(AeronRequestClient client, int capacity) {
+    this(client, capacity, 1);
   }
 
   public CompletableFuture<CommandResult> submit(CommandRequest request) {
@@ -47,28 +67,31 @@ public class EngineGateway implements AutoCloseable {
     return result;
   }
 
-  private void process(PendingRequest pending) {
-    try {
-      CommandResult result = client.send(pending.request());
-      pending.result().complete(result);
-    } catch (RuntimeException e) {
-      pending.result().completeExceptionally(e);
-    }
-  }
-
   private void runWorker() {
     try {
-      while (state == State.RUNNING || !requests.isEmpty()) {
-        PendingRequest pending = requests.poll(100, TimeUnit.MILLISECONDS);
-        if (pending != null) {
-          process(pending);
-        }
+      ClientConfig config = client.config();
+      long timeoutNanos = config.timeout().toNanos();
+      IdleStrategy idle = new SleepingIdleStrategy();
+
+      while (!Thread.currentThread().isInterrupted()
+          && (state == State.RUNNING || !requests.isEmpty() || !inFlight.isEmpty())) {
+
+        int work = doWork(System.nanoTime(), timeoutNanos, config.maxAttempts());
+
+        idle.idle(work);
       }
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
     } finally {
       synchronized (lifecycleLock) {
         state = State.CLOSED;
+      }
+      var iterator = inFlight.values().iterator();
+      while (iterator.hasNext()) {
+        InFlightRequest active = iterator.next();
+        // Remove before completing: completion callbacks can run on this worker.
+        iterator.remove();
+        String message = "Gateway worker stopped; request " + active.pending.request().requestId()
+            + (active.attempts > 0 ? "; outcome unknown" : "");
+        active.pending.result().completeExceptionally(new IllegalStateException(message));
       }
       PendingRequest pending;
       while ((pending = requests.poll()) != null) {
@@ -109,5 +132,96 @@ public class EngineGateway implements AutoCloseable {
       Thread.currentThread().interrupt();
       throw new IllegalStateException("Interrupted while waiting for gateway worker to stop", e);
     }
+  }
+
+  private int doWork(long nowNanos, long timeoutNanos, int maxAttempts) {
+    int work = client.pollResponses(this::handleResponse, 10);
+    work += expireRequests(nowNanos, timeoutNanos, maxAttempts);
+    work += admitRequests(nowNanos, timeoutNanos);
+    work += offerRequests(nowNanos, timeoutNanos);
+    return work;
+  }
+
+  private int admitRequests(long nowNanos, long timeoutNanos) {
+    int workCounter = 0;
+    while (inFlight.size() < maxInFlight) {
+      PendingRequest pending = requests.peek();
+      if (pending == null) {
+        break;
+      }
+      UUID requestId = pending.request().requestId();
+      if (inFlight.containsKey(requestId)) {
+        break;
+      } else {
+        requests.poll();
+        InFlightRequest active = new InFlightRequest(pending, requestCodec, nowNanos + timeoutNanos);
+        inFlight.put(requestId, active);
+      }
+      workCounter++;
+    }
+    return workCounter;
+  }
+
+  private void handleResponse(CommandResponse response) {
+    InFlightRequest active = inFlight.get(response.requestId());
+    if (active == null || active.attempts == 0) {
+      return;
+    }
+    inFlight.remove(response.requestId());
+    active.pending.result().complete(response.result());
+  }
+
+  private int offerRequests(long nowNanos, long timeoutNanos) {
+    var iterator = inFlight.entrySet().iterator();
+    int workCounter = 0;
+    while (iterator.hasNext()) {
+      InFlightRequest active = iterator.next().getValue();
+      if (active.phase == InFlightRequest.Phase.OFFERING) {
+        long result = client.trySend(active.buffer, 0, active.messageLength);
+        if (result >= 0) {
+          active.attempts = active.attempts + 1;
+          active.phase = InFlightRequest.Phase.AWAITING_REPLY;
+          active.deadlineNanos = nowNanos + timeoutNanos;
+          workCounter++;
+        } else if (result == Publication.CLOSED || result == Publication.MAX_POSITION_EXCEEDED) {
+          iterator.remove();
+          String message = "Offer failed for " + active.pending.request().requestId() + "; result=" + result
+              + (active.attempts > 0 ? "; outcome unknown" : "");
+          active.pending.result().completeExceptionally(new IllegalStateException(message));
+          workCounter++;
+        } else {
+          break;
+        }
+      }
+    }
+    return workCounter;
+  }
+
+  private int expireRequests(long nowNanos, long timeoutNanos, int maxAttempts) {
+    var iterator = inFlight.entrySet().iterator();
+    int workCounter = 0;
+    while (iterator.hasNext()) {
+      InFlightRequest active = iterator.next().getValue();
+      if (nowNanos - active.deadlineNanos < 0) {
+        continue;
+      } else if (active.phase == InFlightRequest.Phase.OFFERING) {
+        iterator.remove();
+        String message = "Offer failed for " + active.pending.request().requestId() + "; sending timed out"
+            + (active.attempts > 0 ? "; outcome unknown" : "");
+        active.pending.result().completeExceptionally(new IllegalStateException(message));
+        workCounter++;
+      } else if (active.phase == InFlightRequest.Phase.AWAITING_REPLY && active.attempts < maxAttempts) {
+        active.phase = InFlightRequest.Phase.OFFERING;
+        active.deadlineNanos = nowNanos + timeoutNanos;
+        workCounter++;
+      } else if (active.phase == InFlightRequest.Phase.AWAITING_REPLY && active.attempts >= maxAttempts) {
+        iterator.remove();
+        String message = "No reply after " + active.attempts + " attempts for request "
+            + active.pending.request().requestId() + (active.attempts > 0 ? "; outcome unknown" : "");
+        active.pending.result().completeExceptionally(new IllegalStateException(message));
+        workCounter++;
+      }
+    }
+    return workCounter;
   }
 }

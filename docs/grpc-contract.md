@@ -88,14 +88,24 @@ Use the class play buttons in Zed, starting `AeronEngineServer`, then
 ```
 
 The gateway connects to the engine's Media Driver, publishes requests on IPC stream 1,
-and receives replies on stream 2. It starts an `EngineGateway` with capacity 128
+and receives replies on stream 2. It starts an `EngineGateway` with 128 queue slots and eight active requests
 before opening its plaintext gRPC listener on port 50051. The client connects to
-`localhost:50051` and sets a five-second RPC deadline.
+`localhost:50051` and sets a five-second deadline on each RPC.
 
-The client submits a ten-lot bid at 100 with order ID 1001 and a new UUID. Its result
-depends on the recovered book: it can rest, trade, or be rejected if that order ID
-already rests on the book. A new client run is a new logical request, not a retry
-of the previous run. For a retry, retain the original `SubmitRequest`.
+The client submits 16 ten-lot bids at 100 with order IDs 0–15 and distinct UUIDs.
+It uses a future stub and submits the entire batch before waiting for results. Each
+result depends on the recovered book: an order can rest, trade, or be rejected if
+its order ID already rests on the book. A new client run creates new logical requests.
+For a retry, retain the original `SubmitRequest`.
+
+`submitBatch` prints responses in input-list order, even when RPCs complete in another
+order. An RPC failure prints its UUID and underlying cause to stderr; later results
+are still collected. Business rejections arrive as normal protobuf responses.
+
+`EngineGateway` owns all Aeron I/O on one worker. Each duty cycle polls replies before
+checking timeouts, then admits and offers work up to its in-flight limit. Retries keep
+the original UUID and encoded bytes. Queue capacity and the active-request limit are
+separate bounds; the two-argument constructor keeps an active-request limit of one.
 
 Zed launches Maven with `exec.args` for the target Java class. The SBE execution uses
 an explicit `commandlineArgs` schema path so these launch arguments do not leak into
@@ -143,7 +153,8 @@ GrpcGatewayClient (or a future Go gRPC client)
   -> future completes -> protobuf SubmitResponse -> gRPC client
 ```
 
-This does not replace the SBE Archive format or the existing live Aeron text codecs.
+The gRPC boundary uses protobuf. Live Aeron requests, replies, and the Archive request
+recording use SBE.
 
 ## Tests
 
@@ -160,8 +171,14 @@ variants, and trade field/order mapping. `GrpcExchangeServiceTest` makes real TC
 gRPC calls through the service and gateway worker, covering successful results,
 UUID retries without a second fill, business rejections, invalid input, transport
 failure, a closed gateway, and response conversion failure. These focused service
-tests replace the Aeron send operation with the real state machine or a controlled
-failure; the existing Aeron/Archive integration tests cover transport and persistence.
+tests replace Aeron offers and reply polling with controlled transport behavior.
+
+`GrpcGatewayPipelineTest` uses real gRPC and Aeron to send 16 concurrent requests,
+verify the eight-request window, and correlate replies sent in reverse arrival order.
+`GrpcGatewayClientTest` waits for the whole batch before returning mixed RPC outcomes,
+then checks that a failed middle request does not hide the final successful response.
+Gateway lifecycle tests cover graceful draining and failing all remaining futures if
+the worker exits unexpectedly. Existing Aeron/Archive tests cover recording and recovery.
 
 The demo is a local plaintext integration without authentication or TLS. The Go
 backend, deployment security, and a bounded total shutdown policy remain future work.

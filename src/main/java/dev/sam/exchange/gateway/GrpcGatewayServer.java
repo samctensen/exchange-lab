@@ -23,7 +23,7 @@ public class GrpcGatewayServer {
 
       AeronRequestClient client = new AeronRequestClient(publication, replies);
 
-      try (EngineGateway gateway = new EngineGateway(client, 128)) {
+      try (EngineGateway gateway = new EngineGateway(client, 128, 8)) {
         gateway.start();
 
         Server server = ServerBuilder.forPort(50051)

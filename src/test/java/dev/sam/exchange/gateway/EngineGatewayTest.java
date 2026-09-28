@@ -3,7 +3,6 @@ package dev.sam.exchange.gateway;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -12,22 +11,29 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.function.Consumer;
 
+import org.agrona.DirectBuffer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.CancelResult;
 import dev.sam.exchange.engine.CommandResult;
+import dev.sam.exchange.protocol.SbeRequestCodec;
 import dev.sam.exchange.transport.AeronRequestClient;
 import dev.sam.exchange.transport.CommandRequest;
+import dev.sam.exchange.transport.CommandResponse;
+import io.aeron.Publication;
 
 @Timeout(10)
 class EngineGatewayTest {
@@ -53,6 +59,76 @@ class EngineGatewayTest {
       assertEquals(new CancelResult(1L, false), first.get(3, TimeUnit.SECONDS));
       assertEquals(new CancelResult(2L, false), second.get(3, TimeUnit.SECONDS));
     } finally {
+      gateway.close();
+    }
+  }
+
+  @Test
+  void boundsActiveRequestsCorrelatesOutOfOrderRepliesAndDrainsOnClose() throws Exception {
+    CountDownLatch startPolling = new CountDownLatch(1);
+    LinkedBlockingQueue<CommandRequest> offered = new LinkedBlockingQueue<>();
+    ConcurrentLinkedQueue<CommandResponse> responses = new ConcurrentLinkedQueue<>();
+    CompletableFuture<Integer> firstBatchSize = new CompletableFuture<>();
+    AeronRequestClient client = new AeronRequestClient(null, null) {
+      private final SbeRequestCodec codec = new SbeRequestCodec();
+      private int offers;
+
+      @Override
+      public long trySend(DirectBuffer buffer, int offset, int length) {
+        offered.add(codec.decode(buffer, offset, length));
+        offers++;
+        return 128;
+      }
+
+      @Override
+      public int pollResponses(Consumer<CommandResponse> onResponse, int fragmentLimit) {
+        await(startPolling);
+        if (offers >= 2) {
+          firstBatchSize.complete(offers);
+        }
+        int work = 0;
+        CommandResponse response;
+        while (work < fragmentLimit && (response = responses.poll()) != null) {
+          onResponse.accept(response);
+          work++;
+        }
+        return work;
+      }
+    };
+    EngineGateway gateway = new EngineGateway(client, 3, 2);
+    gateway.start();
+    try {
+      CompletableFuture<CommandResult> first = gateway.submit(request(1));
+      CompletableFuture<CommandResult> second = gateway.submit(request(2));
+      CompletableFuture<CommandResult> third = gateway.submit(request(3));
+      startPolling.countDown();
+      assertEquals(2, firstBatchSize.get(3, TimeUnit.SECONDS));
+      assertEquals(request(1), offered.poll(3, TimeUnit.SECONDS));
+      assertEquals(request(2), offered.poll(3, TimeUnit.SECONDS));
+      assertFalse(first.isDone());
+      assertFalse(second.isDone());
+      assertFalse(third.isDone());
+
+      CompletableFuture<Void> closed = new CompletableFuture<>();
+      Thread closer = closeOnThread(gateway, closed);
+      awaitWaiting(closer);
+      assertRejected(gateway.submit(request(4)));
+      responses.add(new CommandResponse(request(2).requestId(), cancelResult(request(2))));
+      assertEquals(cancelResult(request(2)), second.get(3, TimeUnit.SECONDS));
+      assertEquals(request(3), offered.poll(3, TimeUnit.SECONDS));
+      assertFalse(first.isDone(), "The second reply must not complete the first caller");
+      assertFalse(closed.isDone(), "close must wait for the remaining active requests");
+
+      responses.add(new CommandResponse(request(3).requestId(), cancelResult(request(3))));
+      responses.add(new CommandResponse(request(1).requestId(), cancelResult(request(1))));
+      closed.get(3, TimeUnit.SECONDS);
+      assertEquals(cancelResult(request(1)), first.join());
+      assertEquals(cancelResult(request(3)), third.join());
+    } finally {
+      startPolling.countDown();
+      for (long id = 1; id <= 3; id++) {
+        responses.add(new CommandResponse(request(id).requestId(), cancelResult(request(id))));
+      }
       gateway.close();
     }
   }
@@ -130,19 +206,26 @@ class EngineGatewayTest {
   }
 
   @Test
-  void reportsSendFailureAndContinuesProcessing() throws Exception {
-    IllegalStateException sendFailure = new IllegalStateException("Transport failed; outcome unknown");
-    EngineGateway gateway = new EngineGateway(client(request -> {
-      if (request.command().orderId() == 1L) {
-        throw sendFailure;
+  void reportsTerminalOfferFailureAndContinuesProcessing() throws Exception {
+    AeronRequestClient client = new ReplyingAeronClient(EngineGatewayTest::cancelResult) {
+      private final SbeRequestCodec codec = new SbeRequestCodec();
+
+      @Override
+      public long trySend(DirectBuffer buffer, int offset, int length) {
+        if (codec.decode(buffer, offset, length).command().orderId() == 1L) {
+          return Publication.MAX_POSITION_EXCEEDED;
+        }
+        return super.trySend(buffer, offset, length);
       }
-      return cancelResult(request);
-    }), 2);
+    };
+    EngineGateway gateway = new EngineGateway(client, 2);
     gateway.start();
     try {
       CompletableFuture<CommandResult> failed = gateway.submit(request(1));
       ExecutionException failure = assertThrows(ExecutionException.class, () -> failed.get(3, TimeUnit.SECONDS));
-      assertSame(sendFailure, failure.getCause());
+      assertInstanceOf(IllegalStateException.class, failure.getCause());
+      assertTrue(failure.getCause().getMessage().contains(request(1).requestId().toString()));
+      assertFalse(failure.getCause().getMessage().contains("outcome unknown"));
       assertEquals(new CancelResult(2L, false), gateway.submit(request(2)).get(3, TimeUnit.SECONDS));
     } finally {
       gateway.close();
@@ -258,12 +341,7 @@ class EngineGatewayTest {
 
   // Keep real gateway threads/queues/futures; control only the external request/reply operation.
   private static AeronRequestClient client(Function<CommandRequest, CommandResult> send) {
-    return new AeronRequestClient(null, null) {
-      @Override
-      public CommandResult send(CommandRequest request) {
-        return send.apply(request);
-      }
-    };
+    return new ReplyingAeronClient(send);
   }
 
   private static EngineGateway blockedGateway(int capacity, CountDownLatch entered, CountDownLatch release) {
