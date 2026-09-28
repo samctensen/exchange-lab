@@ -18,7 +18,7 @@ The project currently uses plain Java 25, Maven, and JUnit 5:
 - Separate Aeron IPC client and server processes, with UUIDs connecting requests to replies.
 - Request deduplication across client reconnects, clean restarts, and abrupt process restarts.
 - Bounded client retries after reply timeouts, reusing the same UUID and command.
-- A bounded gateway queue that gives one worker ownership of the synchronous Aeron client.
+- A bounded gateway queue and in-flight window, with one worker owning Aeron offers, reply polling, and UUID correlation.
 - A versioned protobuf contract, a separate Java gRPC gateway process, and a runnable gRPC client.
 - A server that stays available between client sessions and closes its resources on a shutdown request.
 
@@ -43,14 +43,19 @@ Client: CommandRequest(UUID, EngineCommand)
   -> RequestStateMachine: validate, match/cancel, and cache the result
   -> CommandResponse(same UUID, CommandResult)
   -> SBE encode -> Aeron IPC stream 2
-  -> Client: SBE decode, then accept the reply whose UUID matches its current request
+  -> Client: SBE decode, then complete the pending request with the matching UUID
 ```
 
 A duplicate order ID that is still on the book produces a `RejectResult` without changing the book. First-time requests are recorded even when rejected, so replay can reconstruct the same response. Cancelling a missing order returns `CancelResult` with `cancelled=false`.
 
 The server remembers each completed request's UUID, command, and response. Retrying the same UUID and command returns the original response without another recording append or order-book mutation. Reusing a UUID with a different command returns `REQUEST_ID_CONFLICT` and preserves the original cached entry. Recording failures and timeouts stop the agent before applying the pending request or caching a response.
 
-After a reply timeout, the client resends the same request, up to three total attempts by default. A delayed matching reply completes the request; duplicate replies for an earlier order are ignored. If all attempts go unanswered, that request fails with its UUID and an unknown outcome, since the server may already have processed it. The gateway still drains other accepted requests before a successful close returns. In the demo, both orders are queued before waiting for results, and an unknown outcome produces a nonzero process exit. A send failure on a later attempt also preserves the request UUID and unknown-outcome diagnostic.
+After a reply timeout, the client resends the same request, up to three total attempts by default. A delayed matching reply completes the request; replies without an active matching request are ignored. If all attempts go unanswered, that request fails with its UUID and an unknown outcome, since the server may already have processed it. The gateway still drains other accepted requests before a successful close returns. In the IPC demo, both orders are queued before waiting for results, and an unknown outcome produces a nonzero process exit. A send failure on a later attempt also preserves the request UUID and unknown-outcome diagnostic.
+
+The gRPC gateway allows 128 queued requests and eight active requests. Its worker polls replies,
+checks deadlines, admits queued work, and attempts nonblocking offers. Each active request keeps
+its encoded bytes, UUID, attempt count, and deadline. The engine still records and processes one
+request at a time; this window lets the gateway send more work while earlier replies are pending.
 
 ### Ordering, recording, and recovery
 
@@ -85,12 +90,14 @@ mvn spotless:apply   # Format Java sources
 
 1. Run `AeronEngineServer.main` and leave it running.
 2. Run `GrpcGatewayServer.main` and wait for `gRPC gateway listening on port 50051`.
-3. Run `GrpcGatewayClient.main`. It submits order 1001, a ten-lot bid at 100, and prints the protobuf response.
+3. Run `GrpcGatewayClient.main`. It submits 16 ten-lot bids at 100, with order IDs 0–15 and distinct request UUIDs, before waiting for their protobuf responses.
 4. Stop the gateway with **⌃C** before stopping the engine so accepted commands can finish.
 
 The gateway uses the same Aeron directory as the engine and a plaintext gRPC listener on port 50051.
-The demo client generates a new request UUID each run but uses a fixed order ID; rerunning it can
-produce a duplicate-order rejection. Retrying an uncertain request must reuse its original UUID
+The demo client generates new request UUIDs each run but reuses the same order IDs; rerunning it can
+produce duplicate-order rejections. It prints successful RPC responses to stdout and each RPC
+failure, including its request UUID and cause, to stderr, then continues through the batch.
+Retrying an uncertain request must reuse its original UUID
 and command. See [the gRPC guide](docs/grpc-contract.md) for status mapping and shutdown behavior.
 
 Zed's class play button supplies Maven's `exec.args` when launching Java. The SBE generation
