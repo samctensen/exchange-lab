@@ -156,6 +156,22 @@ The [28 September pipeline comparison](benchmarks/results/2026-09-28-aeron-pipel
 
 The [sleeping versus busy-spin comparison](benchmarks/results/2026-09-28-aeron-idle-strategies/report.md) repeats all four windows with both client strategies and measures CPU use. On this Mac and workload, spinning roughly doubled client CPU without a consistent throughput benefit.
 
+#### Locate time spent inside the server
+
+Add `--stage-timing=500,2000` to the dedicated server's program arguments, alongside `--quiet` and a new Archive directory. Run a single benchmark client with matching warmup/sample counts, then stop the server with **⌃C** to print the stage report. Timing is disabled by default. This diagnostic uses bounded primitive arrays (at most 1,000,000 samples), skips the first configured number of completed fresh logged requests, and excludes cached retries and recovery. The report shows the number actually collected; an interrupted run can be incomplete.
+
+| Stage | Boundaries |
+| --- | --- |
+| Log offer | Complete decoded request admitted by the agent → successful request-log offer, including back pressure |
+| Recording observation | Successful log offer → agent observes the FIFO head's recorded position, including queueing and scheduling |
+| Process and encode | That observation → command processed and reply encoded |
+| Reply offer | Encoded reply ready → successful reply publication, including back pressure |
+| Server total | Admission → successful reply publication for the same request |
+
+The server report gives mean, p50, p99, and maximum microseconds. It excludes inbound IPC/decode time before admission and client receipt after publication. **Recording observation is not pure disk-sync time**: Archive polling, forced writes, FIFO delay, and the engine's observation all contribute. Stage means sum to the mean server total (apart from rounding); stage percentiles do not sum to total percentiles. Client and server percentiles also cannot be subtracted to isolate transport time. Samples are written only by the agent and summarized after it stops; no per-request output is added. Compare with timing disabled to check the measurement's impact.
+
+The [server stage comparison](benchmarks/results/2026-09-28-aeron-stage-timing/report.md) contains 20 timing-on/off runs. Recording observation accounted for over 99.8% of mean measured server time at both tested windows (median share across five runs each); separating Archive polling from write/force time is the next measurement.
+
 ### Encode commands, requests, and responses with Simple Binary Encoding (SBE)
 
 Run `mvn generate-sources` once, then run `SbeOrderDemo.main` in Zed using the existing `--add-opens` JVM option. It prints the original order, message header, binary bytes in hex, and the decoded order. The final line should be `Equal: true`. This example runs entirely in memory.

@@ -1,0 +1,360 @@
+{
+  "window_1_timing_off": {
+    "window": 1,
+    "timing": "off",
+    "runs": 5,
+    "metrics": {
+      "p50_us": {
+        "median": 3995.459,
+        "min": 3957.708,
+        "max": 3998.125
+      },
+      "p99_us": {
+        "median": 4179.041,
+        "min": 4113.208,
+        "max": 5964.625
+      },
+      "max_us": {
+        "median": 10665.042,
+        "min": 10626.833,
+        "max": 11269.583
+      },
+      "throughput_rps": {
+        "median": 251.894,
+        "min": 250.85,
+        "max": 266.354
+      },
+      "client_thread_cpu_pct": {
+        "median": 49.582,
+        "min": 49.169,
+        "max": 50.855
+      },
+      "client_jvm_cpu_pct": {
+        "median": 50.701,
+        "min": 50.274,
+        "max": 52.19
+      }
+    }
+  },
+  "window_1_timing_on": {
+    "window": 1,
+    "timing": "on",
+    "runs": 5,
+    "metrics": {
+      "p50_us": {
+        "median": 3991.708,
+        "min": 3978.875,
+        "max": 3996.291
+      },
+      "p99_us": {
+        "median": 4236.375,
+        "min": 4126.459,
+        "max": 5016.625
+      },
+      "max_us": {
+        "median": 10669.875,
+        "min": 10574.25,
+        "max": 10687.875
+      },
+      "throughput_rps": {
+        "median": 252.34,
+        "min": 250.347,
+        "max": 259.812
+      },
+      "client_thread_cpu_pct": {
+        "median": 50.582,
+        "min": 48.686,
+        "max": 50.802
+      },
+      "client_jvm_cpu_pct": {
+        "median": 51.79,
+        "min": 49.764,
+        "max": 52.0
+      },
+      "log_offer_mean_us": {
+        "median": 2.971,
+        "min": 1.096,
+        "max": 3.947
+      },
+      "log_offer_p50_us": {
+        "median": 1.292,
+        "min": 0.708,
+        "max": 2.875
+      },
+      "log_offer_p99_us": {
+        "median": 19.291,
+        "min": 7.333,
+        "max": 21.458
+      },
+      "log_offer_max_us": {
+        "median": 52.375,
+        "min": 38.5,
+        "max": 111.375
+      },
+      "recording_observation_mean_us": {
+        "median": 3945.998,
+        "min": 3825.752,
+        "max": 3986.217
+      },
+      "recording_observation_p50_us": {
+        "median": 3981.042,
+        "min": 3962.875,
+        "max": 3989.458
+      },
+      "recording_observation_p99_us": {
+        "median": 4226.75,
+        "min": 4122.416,
+        "max": 5014.042
+      },
+      "recording_observation_max_us": {
+        "median": 10656.958,
+        "min": 10554.458,
+        "max": 10671.5
+      },
+      "process_encode_mean_us": {
+        "median": 1.793,
+        "min": 0.499,
+        "max": 2.493
+      },
+      "process_encode_p50_us": {
+        "median": 0.542,
+        "min": 0.209,
+        "max": 1.667
+      },
+      "process_encode_p99_us": {
+        "median": 10.167,
+        "min": 3.834,
+        "max": 12.166
+      },
+      "process_encode_max_us": {
+        "median": 71.125,
+        "min": 67.625,
+        "max": 76.083
+      },
+      "reply_offer_mean_us": {
+        "median": 1.381,
+        "min": 0.423,
+        "max": 1.737
+      },
+      "reply_offer_p50_us": {
+        "median": 0.375,
+        "min": 0.209,
+        "max": 1.167
+      },
+      "reply_offer_p99_us": {
+        "median": 9.667,
+        "min": 4.792,
+        "max": 13.333
+      },
+      "reply_offer_max_us": {
+        "median": 28.167,
+        "min": 23.333,
+        "max": 90.916
+      },
+      "server_total_mean_us": {
+        "median": 3952.143,
+        "min": 3833.813,
+        "max": 3988.235
+      },
+      "server_total_p50_us": {
+        "median": 3986.375,
+        "min": 3969.292,
+        "max": 3991.167
+      },
+      "server_total_p99_us": {
+        "median": 4231.167,
+        "min": 4124.5,
+        "max": 5014.917
+      },
+      "server_total_max_us": {
+        "median": 10663.75,
+        "min": 10566.791,
+        "max": 10680.459
+      }
+    },
+    "recording_observation_share_of_mean_server_total_pct": {
+      "median": 99.84451473542329,
+      "min": 99.78973935348438,
+      "max": 99.94940117620953
+    }
+  },
+  "window_8_timing_off": {
+    "window": 8,
+    "timing": "off",
+    "runs": 5,
+    "metrics": {
+      "p50_us": {
+        "median": 7977.708,
+        "min": 7960.25,
+        "max": 7995.917
+      },
+      "p99_us": {
+        "median": 9040.666,
+        "min": 8119.584,
+        "max": 10081.75
+      },
+      "max_us": {
+        "median": 14927.5,
+        "min": 9007.042,
+        "max": 16027.375
+      },
+      "throughput_rps": {
+        "median": 1016.914,
+        "min": 1002.092,
+        "max": 1036.934
+      },
+      "client_thread_cpu_pct": {
+        "median": 50.56,
+        "min": 50.252,
+        "max": 50.952
+      },
+      "client_jvm_cpu_pct": {
+        "median": 54.6,
+        "min": 52.87,
+        "max": 55.125
+      }
+    }
+  },
+  "window_8_timing_on": {
+    "window": 8,
+    "timing": "on",
+    "runs": 5,
+    "metrics": {
+      "p50_us": {
+        "median": 7989.542,
+        "min": 7975.208,
+        "max": 7993.333
+      },
+      "p99_us": {
+        "median": 8298.625,
+        "min": 8123.75,
+        "max": 11968.208
+      },
+      "max_us": {
+        "median": 10046.375,
+        "min": 9036.042,
+        "max": 14001.458
+      },
+      "throughput_rps": {
+        "median": 1015.889,
+        "min": 1004.101,
+        "max": 1030.022
+      },
+      "client_thread_cpu_pct": {
+        "median": 50.455,
+        "min": 50.24,
+        "max": 51.134
+      },
+      "client_jvm_cpu_pct": {
+        "median": 54.165,
+        "min": 53.547,
+        "max": 55.933
+      },
+      "log_offer_mean_us": {
+        "median": 1.336,
+        "min": 1.033,
+        "max": 1.766
+      },
+      "log_offer_p50_us": {
+        "median": 0.542,
+        "min": 0.541,
+        "max": 0.708
+      },
+      "log_offer_p99_us": {
+        "median": 10.083,
+        "min": 8.917,
+        "max": 21.375
+      },
+      "log_offer_max_us": {
+        "median": 56.667,
+        "min": 39.834,
+        "max": 492.083
+      },
+      "recording_observation_mean_us": {
+        "median": 7848.652,
+        "min": 7729.981,
+        "max": 7944.549
+      },
+      "recording_observation_p50_us": {
+        "median": 7979.875,
+        "min": 7962.0,
+        "max": 7983.417
+      },
+      "recording_observation_p99_us": {
+        "median": 8293.625,
+        "min": 8118.042,
+        "max": 11472.292
+      },
+      "recording_observation_max_us": {
+        "median": 10024.292,
+        "min": 9025.291,
+        "max": 13996.875
+      },
+      "process_encode_mean_us": {
+        "median": 0.405,
+        "min": 0.35,
+        "max": 0.766
+      },
+      "process_encode_p50_us": {
+        "median": 0.166,
+        "min": 0.125,
+        "max": 0.208
+      },
+      "process_encode_p99_us": {
+        "median": 3.583,
+        "min": 2.792,
+        "max": 10.083
+      },
+      "process_encode_max_us": {
+        "median": 60.958,
+        "min": 54.917,
+        "max": 76.833
+      },
+      "reply_offer_mean_us": {
+        "median": 0.459,
+        "min": 0.301,
+        "max": 0.561
+      },
+      "reply_offer_p50_us": {
+        "median": 0.167,
+        "min": 0.125,
+        "max": 0.208
+      },
+      "reply_offer_p99_us": {
+        "median": 3.958,
+        "min": 2.625,
+        "max": 6.5
+      },
+      "reply_offer_max_us": {
+        "median": 26.375,
+        "min": 22.875,
+        "max": 364.083
+      },
+      "server_total_mean_us": {
+        "median": 7850.35,
+        "min": 7733.073,
+        "max": 7946.795
+      },
+      "server_total_p50_us": {
+        "median": 7981.417,
+        "min": 7965.209,
+        "max": 7985.417
+      },
+      "server_total_p99_us": {
+        "median": 8294.5,
+        "min": 8118.625,
+        "max": 11965.375
+      },
+      "server_total_max_us": {
+        "median": 10030.25,
+        "min": 9028.333,
+        "max": 13997.917
+      }
+    },
+    "recording_observation_share_of_mean_server_total_pct": {
+      "median": 99.97173703360914,
+      "min": 99.96001589536267,
+      "max": 99.97837039112906
+    }
+  }
+}
