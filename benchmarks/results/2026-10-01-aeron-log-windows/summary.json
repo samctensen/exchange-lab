@@ -1,0 +1,606 @@
+{
+  "aggregation": "Median and full range of five per-run statistics; latency percentiles are not pooled.",
+  "cases": [
+    {
+      "engine_window": 8,
+      "client_window": 8,
+      "runs": 5,
+      "throughput_rps": {
+        "median": 1011.306,
+        "min": 1005.204,
+        "max": 1032.801
+      },
+      "p50_us": {
+        "median": 7986.625,
+        "min": 7975.666,
+        "max": 7996.459
+      },
+      "p99_us": {
+        "median": 8905.208,
+        "min": 8151.667,
+        "max": 9020.0
+      },
+      "max_us": {
+        "median": 10040.0,
+        "min": 9028.917,
+        "max": 14677.125
+      },
+      "client_thread_cpu_pct": {
+        "median": 50.818,
+        "min": 50.071,
+        "max": 51.322
+      },
+      "client_jvm_cpu_pct": {
+        "median": 54.745,
+        "min": 54.499,
+        "max": 55.953
+      },
+      "archive_write_ns": {
+        "median": 1975351838,
+        "min": 1934730392,
+        "max": 1988017489
+      },
+      "archive_write_share_pct": {
+        "median": 99.91,
+        "min": 99.883,
+        "max": 99.919
+      },
+      "archive_max_before_ns": {
+        "median": 5988709,
+        "min": 4166417,
+        "max": 10597709
+      },
+      "archive_max_after_ns": {
+        "median": 10404459,
+        "min": 6052666,
+        "max": 10628334
+      },
+      "log_offer_mean_us": {
+        "median": 1.499,
+        "min": 0.941,
+        "max": 1.956
+      },
+      "recording_observation_mean_us": {
+        "median": 7870.936,
+        "min": 7712.906,
+        "max": 7940.423
+      },
+      "process_encode_mean_us": {
+        "median": 0.647,
+        "min": 0.371,
+        "max": 0.998
+      },
+      "reply_offer_mean_us": {
+        "median": 0.492,
+        "min": 0.318,
+        "max": 0.673
+      },
+      "server_total_mean_us": {
+        "median": 7873.798,
+        "min": 7715.544,
+        "max": 7942.24
+      },
+      "server_total_p99_us": {
+        "median": 8891.583,
+        "min": 8147.208,
+        "max": 9017.333
+      },
+      "amortized_archive_write_us_per_request": {
+        "median": 987.675919,
+        "min": 967.365196,
+        "max": 994.0087445
+      },
+      "recording_share_of_mean_server_pct": {
+        "median": 99.96580928058994,
+        "min": 99.95330465180682,
+        "max": 99.9790628739619
+      }
+    },
+    {
+      "engine_window": 16,
+      "client_window": 16,
+      "runs": 5,
+      "throughput_rps": {
+        "median": 2039.34,
+        "min": 2002.79,
+        "max": 2101.423
+      },
+      "p50_us": {
+        "median": 7978.125,
+        "min": 7940.208,
+        "max": 7991.334
+      },
+      "p99_us": {
+        "median": 9043.834,
+        "min": 8946.291,
+        "max": 14939.042
+      },
+      "max_us": {
+        "median": 15081.417,
+        "min": 13991.0,
+        "max": 16002.166
+      },
+      "client_thread_cpu_pct": {
+        "median": 51.73,
+        "min": 50.927,
+        "max": 52.123
+      },
+      "client_jvm_cpu_pct": {
+        "median": 61.436,
+        "min": 60.227,
+        "max": 62.041
+      },
+      "archive_write_ns": {
+        "median": 978882253,
+        "min": 949658251,
+        "max": 997090993
+      },
+      "archive_write_share_pct": {
+        "median": 99.814,
+        "min": 99.756,
+        "max": 99.848
+      },
+      "archive_max_before_ns": {
+        "median": 4955708,
+        "min": 4053917,
+        "max": 6069250
+      },
+      "archive_max_after_ns": {
+        "median": 9736875,
+        "min": 8945709,
+        "max": 10651250
+      },
+      "log_offer_mean_us": {
+        "median": 1.54,
+        "min": 1.163,
+        "max": 2.067
+      },
+      "recording_observation_mean_us": {
+        "median": 7794.76,
+        "min": 7564.53,
+        "max": 7956.707
+      },
+      "process_encode_mean_us": {
+        "median": 0.603,
+        "min": 0.394,
+        "max": 0.976
+      },
+      "reply_offer_mean_us": {
+        "median": 0.451,
+        "min": 0.297,
+        "max": 0.672
+      },
+      "server_total_mean_us": {
+        "median": 7797.646,
+        "min": 7567.124,
+        "max": 7958.835
+      },
+      "server_total_p99_us": {
+        "median": 9014.833,
+        "min": 8926.0,
+        "max": 14931.625
+      },
+      "amortized_archive_write_us_per_request": {
+        "median": 489.4411265,
+        "min": 474.82912550000003,
+        "max": 498.5454965
+      },
+      "recording_share_of_mean_server_pct": {
+        "median": 99.96572013356726,
+        "min": 99.95101746841512,
+        "max": 99.97668277659585
+      }
+    },
+    {
+      "engine_window": 32,
+      "client_window": 32,
+      "runs": 5,
+      "throughput_rps": {
+        "median": 4077.051,
+        "min": 4027.996,
+        "max": 4102.068
+      },
+      "p50_us": {
+        "median": 7979.792,
+        "min": 7978.834,
+        "max": 7982.709
+      },
+      "p99_us": {
+        "median": 8987.417,
+        "min": 8198.75,
+        "max": 9013.75
+      },
+      "max_us": {
+        "median": 9073.375,
+        "min": 8207.542,
+        "max": 10098.667
+      },
+      "client_thread_cpu_pct": {
+        "median": 51.828,
+        "min": 51.185,
+        "max": 51.939
+      },
+      "client_jvm_cpu_pct": {
+        "median": 70.536,
+        "min": 65.933,
+        "max": 71.505
+      },
+      "archive_write_ns": {
+        "median": 489164751,
+        "min": 485800293,
+        "max": 494853626
+      },
+      "archive_write_share_pct": {
+        "median": 99.703,
+        "min": 99.639,
+        "max": 99.734
+      },
+      "archive_max_before_ns": {
+        "median": 5067750,
+        "min": 4085833,
+        "max": 10541750
+      },
+      "archive_max_after_ns": {
+        "median": 5492958,
+        "min": 4945708,
+        "max": 10541750
+      },
+      "log_offer_mean_us": {
+        "median": 1.229,
+        "min": 1.156,
+        "max": 1.266
+      },
+      "recording_observation_mean_us": {
+        "median": 7735.663,
+        "min": 7648.62,
+        "max": 7824.475
+      },
+      "process_encode_mean_us": {
+        "median": 0.366,
+        "min": 0.344,
+        "max": 0.443
+      },
+      "reply_offer_mean_us": {
+        "median": 0.304,
+        "min": 0.295,
+        "max": 0.39
+      },
+      "server_total_mean_us": {
+        "median": 7737.577,
+        "min": 7650.682,
+        "max": 7826.482
+      },
+      "server_total_p99_us": {
+        "median": 8944.209,
+        "min": 8178.833,
+        "max": 8977.083
+      },
+      "amortized_archive_write_us_per_request": {
+        "median": 244.58237549999998,
+        "min": 242.9001465,
+        "max": 247.42681299999998
+      },
+      "recording_share_of_mean_server_pct": {
+        "median": 99.9752635741137,
+        "min": 99.97304815439983,
+        "max": 99.97699618016192
+      }
+    },
+    {
+      "engine_window": 8,
+      "client_window": 32,
+      "runs": 5,
+      "throughput_rps": {
+        "median": 1032.197,
+        "min": 1009.772,
+        "max": 1153.025
+      },
+      "p50_us": {
+        "median": 31944.459,
+        "min": 27962.292,
+        "max": 31987.041
+      },
+      "p99_us": {
+        "median": 33040.125,
+        "min": 31927.167,
+        "max": 38009.625
+      },
+      "max_us": {
+        "median": 33100.666,
+        "min": 31987.542,
+        "max": 39070.625
+      },
+      "client_thread_cpu_pct": {
+        "median": 51.567,
+        "min": 51.149,
+        "max": 52.12
+      },
+      "client_jvm_cpu_pct": {
+        "median": 55.782,
+        "min": 54.517,
+        "max": 57.839
+      },
+      "archive_write_ns": {
+        "median": 1935957302,
+        "min": 1731728536,
+        "max": 1979209320
+      },
+      "archive_write_share_pct": {
+        "median": 99.914,
+        "min": 99.836,
+        "max": 99.928
+      },
+      "archive_max_before_ns": {
+        "median": 6853500,
+        "min": 4460708,
+        "max": 9035458
+      },
+      "archive_max_after_ns": {
+        "median": 6986583,
+        "min": 5995833,
+        "max": 10619750
+      },
+      "log_offer_mean_us": {
+        "median": 1.248,
+        "min": 1.113,
+        "max": 2.733
+      },
+      "recording_observation_mean_us": {
+        "median": 7739.365,
+        "min": 6912.239,
+        "max": 7901.741
+      },
+      "process_encode_mean_us": {
+        "median": 0.497,
+        "min": 0.445,
+        "max": 1.394
+      },
+      "reply_offer_mean_us": {
+        "median": 0.396,
+        "min": 0.346,
+        "max": 0.862
+      },
+      "server_total_mean_us": {
+        "median": 7741.553,
+        "min": 6917.228,
+        "max": 7903.645
+      },
+      "server_total_p99_us": {
+        "median": 8916.666,
+        "min": 8092.75,
+        "max": 9975.625
+      },
+      "amortized_archive_write_us_per_request": {
+        "median": 967.9786509999999,
+        "min": 865.864268,
+        "max": 989.6046600000001
+      },
+      "recording_share_of_mean_server_pct": {
+        "median": 99.97223672757819,
+        "min": 99.92787573288027,
+        "max": 99.97590984918983
+      }
+    },
+    {
+      "engine_window": 16,
+      "client_window": 32,
+      "runs": 5,
+      "throughput_rps": {
+        "median": 2041.74,
+        "min": 2022.97,
+        "max": 2112.826
+      },
+      "p50_us": {
+        "median": 15973.708,
+        "min": 15013.5,
+        "max": 15976.834
+      },
+      "p99_us": {
+        "median": 17036.042,
+        "min": 16090.583,
+        "max": 23003.833
+      },
+      "max_us": {
+        "median": 17571.875,
+        "min": 16116.583,
+        "max": 23107.709
+      },
+      "client_thread_cpu_pct": {
+        "median": 51.705,
+        "min": 51.097,
+        "max": 52.19
+      },
+      "client_jvm_cpu_pct": {
+        "median": 59.612,
+        "min": 59.273,
+        "max": 62.082
+      },
+      "archive_write_ns": {
+        "median": 977715706,
+        "min": 945063962,
+        "max": 987131743
+      },
+      "archive_write_share_pct": {
+        "median": 99.828,
+        "min": 99.812,
+        "max": 99.85
+      },
+      "archive_max_before_ns": {
+        "median": 5029750,
+        "min": 4402000,
+        "max": 9083583
+      },
+      "archive_max_after_ns": {
+        "median": 6032167,
+        "min": 4550125,
+        "max": 11051875
+      },
+      "log_offer_mean_us": {
+        "median": 1.201,
+        "min": 1.182,
+        "max": 1.66
+      },
+      "recording_observation_mean_us": {
+        "median": 7800.436,
+        "min": 7553.237,
+        "max": 7887.067
+      },
+      "process_encode_mean_us": {
+        "median": 0.491,
+        "min": 0.428,
+        "max": 0.762
+      },
+      "reply_offer_mean_us": {
+        "median": 0.308,
+        "min": 0.303,
+        "max": 0.5
+      },
+      "server_total_mean_us": {
+        "median": 7802.74,
+        "min": 7555.197,
+        "max": 7888.999
+      },
+      "server_total_p99_us": {
+        "median": 8356.0,
+        "min": 8090.833,
+        "max": 9023.0
+      },
+      "amortized_archive_write_us_per_request": {
+        "median": 488.857853,
+        "min": 472.53198100000003,
+        "max": 493.5658715
+      },
+      "recording_share_of_mean_server_pct": {
+        "median": 99.97405759240957,
+        "min": 99.9629527307527,
+        "max": 99.97551020097733
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "baseline": [
+        8,
+        8
+      ],
+      "candidate": [
+        16,
+        16
+      ],
+      "aggregation": "Candidate / baseline within each round, then median and range.",
+      "throughput_rps": {
+        "median_ratio": 2.0165409875942593,
+        "min_ratio": 1.9874600008723478,
+        "max_ratio": 2.0494269878902363
+      },
+      "p50_us": {
+        "median_ratio": 0.9989357206579751,
+        "min_ratio": 0.995207968120103,
+        "max_ratio": 0.9994369692731612
+      },
+      "p99_us": {
+        "median_ratio": 1.0958499432616606,
+        "min_ratio": 1.0018857886560135,
+        "max_ratio": 1.6562130820399112
+      },
+      "amortized_archive_write_us_per_request": {
+        "median_ratio": 0.49554830393713384,
+        "min_ratio": 0.4874444293476771,
+        "max_ratio": 0.5027997395133593
+      }
+    },
+    {
+      "baseline": [
+        8,
+        8
+      ],
+      "candidate": [
+        32,
+        32
+      ],
+      "aggregation": "Candidate / baseline within each round, then median and range.",
+      "throughput_rps": {
+        "median_ratio": 4.014084703204524,
+        "min_ratio": 3.928330331167938,
+        "max_ratio": 4.056208506624108
+      },
+      "p50_us": {
+        "median_ratio": 0.9991339270342604,
+        "min_ratio": 0.9977958994099764,
+        "max_ratio": 1.0006060935851626
+      },
+      "p99_us": {
+        "median_ratio": 1.0057758738182019,
+        "min_ratio": 0.9813747228381374,
+        "max_ratio": 1.1017653316008051
+      },
+      "amortized_archive_write_us_per_request": {
+        "median_ratio": 0.2486097575774395,
+        "min_ratio": 0.2459310203147719,
+        "max_ratio": 0.25400047130870324
+      }
+    },
+    {
+      "baseline": [
+        8,
+        32
+      ],
+      "candidate": [
+        16,
+        32
+      ],
+      "aggregation": "Candidate / baseline within each round, then median and range.",
+      "throughput_rps": {
+        "median_ratio": 2.0022824180566388,
+        "min_ratio": 1.7707681966999846,
+        "max_ratio": 2.03423347052602
+      },
+      "p50_us": {
+        "median_ratio": 0.4994574521600794,
+        "min_ratio": 0.4850934139639245,
+        "max_ratio": 0.5711992779418796
+      },
+      "p99_us": {
+        "median_ratio": 0.503977787944668,
+        "min_ratio": 0.44820336954126755,
+        "max_ratio": 0.6962392848090011
+      },
+      "amortized_archive_write_us_per_request": {
+        "median_ratio": 0.4989372257752788,
+        "min_ratio": 0.4910983038418594,
+        "max_ratio": 0.5645894755874138
+      }
+    },
+    {
+      "baseline": [
+        8,
+        32
+      ],
+      "candidate": [
+        32,
+        32
+      ],
+      "aggregation": "Candidate / baseline within each round, then median and range.",
+      "throughput_rps": {
+        "median_ratio": 3.9091123109251438,
+        "min_ratio": 3.53596062531168,
+        "max_ratio": 4.06011885202092
+      },
+      "p50_us": {
+        "median_ratio": 0.24989338526597055,
+        "min_ratio": 0.24943957773399544,
+        "max_ratio": 0.28540221237944297
+      },
+      "p99_us": {
+        "median_ratio": 0.26791666193756836,
+        "min_ratio": 0.2371438813195342,
+        "max_ratio": 0.28172192665888585
+      },
+      "amortized_archive_write_us_per_request": {
+        "median_ratio": 0.25529516869478974,
+        "min_ratio": 0.24558931412480542,
+        "max_ratio": 0.28242978089956244
+      }
+    }
+  ]
+}

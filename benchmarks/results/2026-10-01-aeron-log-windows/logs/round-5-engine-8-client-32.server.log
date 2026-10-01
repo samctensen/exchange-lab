@@ -1,0 +1,11 @@
+Server ready: /private/tmp/exchange-windows-measure-vsbrlpty/exchange-lab-aeron
+Archive: /private/tmp/exchange-windows-measure-vsbrlpty/archive
+Request recording: 0
+Engine log window: 8
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=1.299 p50=0.625 p99=12.750 max=44.625 us
+Recording observation: mean=7889.530 p50=7989.542 p99=8091.791 max=8256.250 us
+Process and encode: mean=0.497 p50=0.167 p99=4.208 max=69.458 us
+Reply offer: mean=0.396 p50=0.167 p99=4.375 max=22.958 us
+Server total: mean=7891.721 p50=7991.458 p99=8092.750 max=8272.250 us

@@ -1,0 +1,11 @@
+Server ready: /private/tmp/exchange-windows-measure-dijvl2fb/exchange-lab-aeron
+Archive: /private/tmp/exchange-windows-measure-dijvl2fb/archive
+Request recording: 0
+Engine log window: 8
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=1.113 p50=0.584 p99=9.084 max=39.417 us
+Recording observation: mean=7901.741 p50=7996.708 p99=8232.041 max=9999.917 us
+Process and encode: mean=0.445 p50=0.167 p99=4.917 max=64.750 us
+Reply offer: mean=0.346 p50=0.167 p99=3.875 max=23.333 us
+Server total: mean=7903.645 p50=7998.792 p99=8233.666 max=10007.708 us

@@ -1,0 +1,11 @@
+Server ready: /private/tmp/exchange-windows-measure-lqthgfsq/exchange-lab-aeron
+Archive: /private/tmp/exchange-windows-measure-lqthgfsq/archive
+Request recording: 0
+Engine log window: 8
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=2.733 p50=0.792 p99=27.750 max=75.542 us
+Recording observation: mean=6912.239 p50=6981.375 p99=8911.875 max=9135.375 us
+Process and encode: mean=1.394 p50=0.292 p99=10.333 max=76.042 us
+Reply offer: mean=0.862 p50=0.209 p99=8.167 max=26.958 us
+Server total: mean=6917.228 p50=6990.125 p99=8916.666 max=9137.208 us

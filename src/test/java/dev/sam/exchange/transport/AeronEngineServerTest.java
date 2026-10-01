@@ -2,6 +2,7 @@ package dev.sam.exchange.transport;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -41,6 +42,19 @@ import io.aeron.Subscription;
 
 class AeronEngineServerTest {
   private static final int IPC_MTU_LENGTH = 1408;
+
+  @ParameterizedTest
+  @ValueSource(strings = {"0", "-1", "", "oops", "2147483648"})
+  void rejectsInvalidLogWindowBeforeStartingResources(String logWindow) {
+    assertThrows(IllegalArgumentException.class,
+        () -> AeronEngineServer.main(new String[]{"--log-window=" + logWindow}));
+  }
+
+  @Test
+  void rejectsDuplicateLogWindowBeforeStartingResources() {
+    assertThrows(IllegalArgumentException.class,
+        () -> AeronEngineServer.main(new String[]{"--log-window=8", "--log-window=16"}));
+  }
 
   @Test
   @Timeout(30)

@@ -1,0 +1,18 @@
+Warmup: 500 requests
+Attempts per request: 1
+Max in flight: 8
+Client idle strategy: sleep
+Samples: 2000 requests
+Round-trip latency (microseconds):
+p50: 7992.459 us
+p99: 9020.000 us
+max: 11006.958 us
+Throughput: 1005.204 requests/s
+Client thread CPU: 50.093%
+Client JVM CPU: 54.620%
+Archive ID: 1
+Archive write bytes (measured phase): 128000
+Archive write time (measured phase): 1988017489 ns
+Archive write time / client elapsed: 99.918%
+Archive max write time before (lifetime): 4166417 ns
+Archive max write time after (lifetime): 7007541 ns

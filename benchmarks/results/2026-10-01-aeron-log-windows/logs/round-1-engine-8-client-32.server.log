@@ -1,0 +1,11 @@
+Server ready: /private/tmp/exchange-windows-measure-cljleuu8/exchange-lab-aeron
+Archive: /private/tmp/exchange-windows-measure-cljleuu8/archive
+Request recording: 0
+Engine log window: 8
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=1.248 p50=0.583 p99=12.208 max=138.542 us
+Recording observation: mean=7633.570 p50=7962.958 p99=9974.833 max=15010.167 us
+Process and encode: mean=0.458 p50=0.167 p99=5.167 max=76.416 us
+Reply offer: mean=0.365 p50=0.167 p99=3.875 max=32.084 us
+Server total: mean=7635.642 p50=7964.834 p99=9975.625 max=15013.416 us
