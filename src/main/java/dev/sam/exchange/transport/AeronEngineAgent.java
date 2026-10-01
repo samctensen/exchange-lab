@@ -28,9 +28,10 @@ public class AeronEngineAgent implements Agent {
   private final NanoClock clock;
   private final boolean logResults;
   private final EngineStageTimings stageTimings;
+  private final int logWindow;
 
   private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
-  private static final int MAX_PENDING_LOG_REQUESTS = 8;
+  static final int DEFAULT_LOG_WINDOW = 8;
   private CommandRequest pendingRequest;
   private long logDeadlineNanos;
   private CommandResponse pendingResponse;
@@ -62,6 +63,11 @@ public class AeronEngineAgent implements Agent {
     this(requests, replies, processor, requestLog, logResults, SystemNanoClock.INSTANCE);
   }
 
+  public AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor,
+      RequestLog requestLog, boolean logResults, int logWindow) {
+    this(requests, replies, processor, requestLog, logResults, SystemNanoClock.INSTANCE, null, logWindow);
+  }
+
   AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor, RequestLog requestLog,
       boolean logResults, NanoClock clock) {
     this(requests, replies, processor, requestLog, logResults, clock, null);
@@ -69,6 +75,12 @@ public class AeronEngineAgent implements Agent {
 
   AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor, RequestLog requestLog,
       boolean logResults, NanoClock clock, EngineStageTimings stageTimings) {
+    this(requests, replies, processor, requestLog, logResults, clock, stageTimings, DEFAULT_LOG_WINDOW);
+  }
+
+  AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor, RequestLog requestLog,
+      boolean logResults, NanoClock clock, EngineStageTimings stageTimings, int logWindow) {
+    this.logWindow = validateLogWindow(logWindow);
     this.requests = requests;
     this.replies = replies;
     this.processor = processor;
@@ -76,6 +88,13 @@ public class AeronEngineAgent implements Agent {
     this.logResults = logResults;
     this.clock = clock;
     this.stageTimings = stageTimings;
+  }
+
+  static int validateLogWindow(int logWindow) {
+    if (logWindow <= 0) {
+      throw new IllegalArgumentException("Log window must be positive: " + logWindow);
+    }
+    return logWindow;
   }
 
   @Override
@@ -170,7 +189,7 @@ public class AeronEngineAgent implements Agent {
   }
 
   private int offerPendingRequest() {
-    if (pendingRequest == null || pendingLoggedRequests.size() >= MAX_PENDING_LOG_REQUESTS) {
+    if (pendingRequest == null || pendingLoggedRequests.size() >= logWindow) {
       return 0;
     }
     UUID requestId = pendingRequest.requestId();
@@ -206,7 +225,7 @@ public class AeronEngineAgent implements Agent {
       return 0;
     }
     int work = 0;
-    while (pendingLoggedRequests.size() < MAX_PENDING_LOG_REQUESTS) {
+    while (pendingLoggedRequests.size() < logWindow) {
       if (pendingRequest == null) {
         int result = requests.poll(assembler, 1);
         work = work + result;

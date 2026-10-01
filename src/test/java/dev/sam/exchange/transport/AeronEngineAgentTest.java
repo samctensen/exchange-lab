@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import dev.sam.exchange.engine.CancelOrder;
@@ -362,41 +363,51 @@ class AeronEngineAgentTest {
     }
   }
 
-  @Test
-  void boundsUnrecordedWindowAndRefillsOnlyFreedSlots(@TempDir Path tempDir) throws Exception {
-    try (TestServer server = new TestServer(tempDir);
+  @ParameterizedTest
+  @ValueSource(ints = {0, -1})
+  void rejectsNonPositiveLogWindow(int logWindow) {
+    assertThrows(IllegalArgumentException.class, () -> new AeronEngineAgent(null, null, null, null, false, logWindow));
+  }
+
+  @ParameterizedTest
+  @CsvSource({"default, 8", "1, 1", "8, 8", "16, 16", "32, 32"})
+  void boundsUnrecordedWindowAndRefillsOnlyFreedSlots(String configuredWindow, int window, @TempDir Path tempDir)
+      throws Exception {
+    Integer logWindow = configuredWindow.equals("default") ? null : Integer.valueOf(configuredWindow);
+    int batchSize = window + 2;
+    try (TestServer server = new TestServer(tempDir, 256, null, logWindow);
         Subscription responses = server.aeron.addSubscription("aeron:ipc", 2)) {
       awaitConnected(server.replies);
       server.log.recordImmediately = false;
       List<CommandRequest> batch = new ArrayList<>();
       List<CommandResponse> expected = new ArrayList<>();
-      for (long id = 1; id <= 10; id++) {
+      for (long id = 1; id <= batchSize; id++) {
         CommandRequest request = new CommandRequest(new UUID(0, id), new CancelOrder(id));
         batch.add(request);
         expected.add(new CommandResponse(request.requestId(), new CancelResult(id, false)));
         server.send(request);
       }
 
-      server.awaitAccepted(8);
+      server.awaitAccepted(window);
       for (int i = 0; i < 20; i++)
         assertEquals(0, server.agent.doWork());
-      assertEquals(batch.subList(0, 8), server.log.accepted);
+      assertEquals(batch.subList(0, window), server.log.accepted);
       assertEquals(List.of(), server.processor.processed);
 
       server.log.recordedPosition = 64;
       assertEquals(expected.subList(0, 1), server.awaitResponses(responses, 1));
-      server.awaitAccepted(9);
+      server.awaitAccepted(window + 1);
       for (int i = 0; i < 20; i++)
         assertEquals(0, server.agent.doWork());
-      assertEquals(batch.subList(0, 9), server.log.accepted, "Only one slot was freed");
+      assertEquals(batch.subList(0, window + 1), server.log.accepted, "Only one slot was freed");
       assertEquals(batch.subList(0, 1), server.processor.processed);
 
       server.log.recordImmediately = true;
-      server.log.recordedPosition = 9 * 64L;
-      assertEquals(expected.subList(1, 10), server.awaitResponses(responses, 9));
+      server.log.recordedPosition = (window + 1) * 64L;
+      assertEquals(expected.subList(1, batchSize), server.awaitResponses(responses, batchSize - 1));
       assertEquals(batch, server.processor.processed);
       assertEquals(batch, server.log.accepted);
-      assertEquals(10, server.log.offers);
+      assertEquals(batchSize, server.log.offers);
     }
   }
 
@@ -590,6 +601,10 @@ class AeronEngineAgentTest {
     }
 
     TestServer(Path tempDir, int mtuLength, EngineStageTimings timings) throws IOException {
+      this(tempDir, mtuLength, timings, null);
+    }
+
+    TestServer(Path tempDir, int mtuLength, EngineStageTimings timings, Integer logWindow) throws IOException {
       processor = new RecordingProcessor(book);
       driver = MediaDriver
           .launchEmbedded(new MediaDriver.Context().aeronDirectoryName(tempDir.resolve("aeron").toString())
@@ -599,7 +614,9 @@ class AeronEngineAgentTest {
       requests = aeron.addSubscription("aeron:ipc", 1);
       replies = aeron.addPublication("aeron:ipc", 2);
       commands = aeron.addPublication("aeron:ipc", 1);
-      agent = new AeronEngineAgent(requests, replies, processor, log, false, clock, timings);
+      agent = logWindow == null
+          ? new AeronEngineAgent(requests, replies, processor, log, false, clock, timings)
+          : new AeronEngineAgent(requests, replies, processor, log, false, clock, timings, logWindow);
       awaitConnected(commands);
     }
 
