@@ -88,8 +88,10 @@ Use the class play buttons in Zed, starting `AeronEngineServer`, then
 ```
 
 The gateway connects to the engine's Media Driver, publishes requests on IPC stream 1,
-and receives replies on stream 2. It starts an `EngineGateway` with 128 queue slots and eight active requests
-before opening its plaintext gRPC listener on port 50051. The client connects to
+and receives replies on stream 2. By default it starts an `EngineGateway` with 128 queue slots and eight active requests
+before opening its plaintext gRPC listener on port 50051. Server flags `--queue-capacity`, `--max-in-flight`, and
+`--port` configure these values; `--diagnostics` prints lifetime queue/retry/timeout statistics after shutdown drain.
+The client connects to
 `localhost:50051` and sets a five-second deadline on each RPC.
 
 The client submits 16 ten-lot bids at 100 with order IDs 0–15 and distinct UUIDs.

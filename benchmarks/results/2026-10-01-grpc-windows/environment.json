@@ -1,0 +1,453 @@
+{
+  "started_at": "2026-10-01T20:48:20.925505+00:00",
+  "base_commit": "13caea595f4ff4ba8eaeacd4360823263e7142c0",
+  "build_directory": "/private/tmp/exchange-grpc-benchmark-ycehkf44",
+  "java": "openjdk version \"25.0.4.1\" 2026-08-18\nOpenJDK Runtime Environment Homebrew (build 25.0.4.1)\nOpenJDK 64-Bit Server VM Homebrew (build 25.0.4.1, mixed mode, sharing)",
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83",
+  "cpu": "Apple M4 Pro",
+  "logical_cpus": 14,
+  "physical_cpus": 14,
+  "memory_bytes": 25769803776,
+  "existing_exchange_processes": [],
+  "load_average_before": [
+    2.2802734375,
+    2.6025390625,
+    2.49755859375
+  ],
+  "application_validation": {
+    "tests": 552,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "spotless": "passed"
+  },
+  "archive_file_sync_level": 2,
+  "archive_catalog_sync_level": 2,
+  "engine_idle_strategy": "BusySpinIdleStrategy",
+  "gateway_idle_strategy": "SleepingIdleStrategy",
+  "gateway_queue_capacity": 128,
+  "gateway_retry_config": {
+    "timeout_seconds": 5,
+    "max_attempts": 3
+  },
+  "benchmark_application_rpc_attempts": 1,
+  "benchmark_channel_retries": "disabled",
+  "sample_count": 2000,
+  "baseline_warmup_count": 500,
+  "probe_warmup_count": 0,
+  "baseline_rpc_deadline_ms": 5000,
+  "deadline_probe_rpc_deadline_ms": 10,
+  "diagnostic_scope": "Gateway counters include warmup and shutdown drain; engine stage timing skips warmup only in baseline runs.",
+  "probe_caveat": "Pressure and deadline probes start cold with no warmup; they describe failure behavior, not steady-state latency.",
+  "grpc_transport": "plaintext localhost TCP; ephemeral port; three separate JVMs",
+  "jvm_args": [
+    "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED",
+    "-Djava.io.tmpdir=<unique-run-directory>"
+  ],
+  "source_hashes": {
+    "src/main/.DS_Store": "1a4099551936af8f22ee641b0f6049b0f31995abcff7b7b6eb34c53cd5b86981",
+    "src/main/java/.DS_Store": "45a89062d4da6bc6b2062aec5ce74bf462d5ed7eacb8519f010839c9a76b2883",
+    "src/main/java/dev/.DS_Store": "0d3491510b0cd0397cd412e7386aaa3014640d3ef353c959467e11fff3a97876",
+    "src/main/java/dev/sam/.DS_Store": "2f000fca78797488e3fb08c34c9ad3e65fae2605bf2668f3d32f6f15e1c6ad28",
+    "src/main/java/dev/sam/exchange/.DS_Store": "d6ef3178b3213dbe7a16ebcf91225c2d1fa9cb0525c0eead195dbddb0bfba12d",
+    "src/main/java/dev/sam/exchange/transport/ArchiveWriteCounters.java": "e6fcac2f6480b95b11c04ce6558d5c2414a507dd706a0a21a8a0cfa0e88a6407",
+    "src/main/java/dev/sam/exchange/transport/PendingLoggedRequest.java": "9250355d41da82be4d22a2622d86d47ae877401ed0eae60fcd27b78cf046492b",
+    "src/main/java/dev/sam/exchange/transport/AeronEngineClient.java": "86f0245a5acf1866cde44f27607756624825b526fc76b5fc40863e6baa08239e",
+    "src/main/java/dev/sam/exchange/transport/ClientConfig.java": "81047696cb0c59996693199a8be67aa659df0211fbfddb3ce679f87807209b6a",
+    "src/main/java/dev/sam/exchange/transport/SbeOrderDemo.java": "93d32794338eaaf73e95596841b0754aa6b9f5df282fcc5c583999fdad7d1936",
+    "src/main/java/dev/sam/exchange/transport/CommandRequest.java": "aabbf268377816bb975bb66316517b84a7d49bca30c8eda851bb903765689ec1",
+    "src/main/java/dev/sam/exchange/transport/AeronLatencyBenchmark.java": "00672754bf5b461dc28e33ebd0b98c56b3629c5f6235dad56a0f6426dcad1f86",
+    "src/main/java/dev/sam/exchange/transport/CommandResponseCodec.java": "8cbc5e6cef5a1621f6cdce9f2ca778a34f60b8053d4dafa19971b6b61bcdc819",
+    "src/main/java/dev/sam/exchange/transport/AeronRequestClient.java": "274a4edab7d32446450d592e168725cc2987b4a1cbcb5c4386fd39628d6ac8ef",
+    "src/main/java/dev/sam/exchange/transport/AeronOrderDemo.java": "2c30ffe61a08b8b92e899d99df95f1c8983dc5aca7eb744979d039a5a87d86c2",
+    "src/main/java/dev/sam/exchange/transport/CommandResponse.java": "2a49c22794a9fd6866a353a5e287315cc6551796c19b75168fb9d32a517bb2a9",
+    "src/main/java/dev/sam/exchange/transport/CommandResultCodec.java": "1f1891b7ce4e1781d109fc6905568e82020cd67c4b1cd611e0e62ec5bd223ba6",
+    "src/main/java/dev/sam/exchange/transport/EngineStageTimings.java": "71f3b8d8a7fb6a13a2b7a9f63137bc4b0a529942256ed2e2394247ca7b4af818",
+    "src/main/java/dev/sam/exchange/transport/AeronEngineAgent.java": "78a4f9f9adbd9eb524b89e89fe168b0053f98c859f53bf71f612f7d02b954371",
+    "src/main/java/dev/sam/exchange/transport/RequestStateMachine.java": "9a0d7161bec6a3b9985e94148d7d4f1db2842344d51cfc9057c00d41e01dea93",
+    "src/main/java/dev/sam/exchange/transport/AeronEngineServer.java": "5a4324fd81ab872160dafb8e510757bc4a8ed45559b0030dd596ca78d2a8680c",
+    "src/main/java/dev/sam/exchange/transport/CommandRequestCodec.java": "8beb05594f8dd8b989f86288701bc34bb00202bd6beeee12c91ae719da45db20",
+    "src/main/java/dev/sam/exchange/transport/AeronArchiveDemo.java": "27c6091e7d93722159f7d0af2b0793f66bfe3525c4a070d12c22616cc4397707",
+    "src/main/java/dev/sam/exchange/protocol/SbeRequestCodec.java": "25bf25232630a87c2cfde500e1e41b933f68badfd345399d489ad4e7534cf303",
+    "src/main/java/dev/sam/exchange/protocol/CommandCodec.java": "a7011629a614870286f665c1925bf8b92793e863239f23363a5c843bc643bc22",
+    "src/main/java/dev/sam/exchange/protocol/SbeCommandCodec.java": "9320456bf7b5c36910c1ba68cea736fc888897cd6767aaadb5fc8cc2181b8708",
+    "src/main/java/dev/sam/exchange/protocol/SbeResponseCodec.java": "6ec45f5dc2f7d9c60c53149c5ede65b7ee0e3b126b092d0999967cbc0fa32ae7",
+    "src/main/java/dev/sam/exchange/persistence/RequestLog.java": "8804c859584fe550e1beac7f09414e52fb9d2d3be644ada9eb43846178321cd3",
+    "src/main/java/dev/sam/exchange/persistence/ArchiveRuntime.java": "89da1e60b49a1533fdbbc55a62dd3e04783146dd2dc64404d230fc9a949a21ce",
+    "src/main/java/dev/sam/exchange/persistence/ArchiveRequestLog.java": "3ab5987049b452e267e3a6a914558c21e712f75cc982977a1562a41763dcdbcf",
+    "src/main/java/dev/sam/exchange/engine/ReplayRunner.java": "32aada13c4b2960c5da7f2313b9d6f420fb9a17db150167f84e932ebdba8abb5",
+    "src/main/java/dev/sam/exchange/engine/CancelResult.java": "cb0e434caa346acc82fbd659fb16574f8276d458058741a9ee7341f9ff383998",
+    "src/main/java/dev/sam/exchange/engine/RejectReason.java": "6276ff805c213b7d3e0608b7432166d67086b546e77c697fbcf81060e55a9624",
+    "src/main/java/dev/sam/exchange/engine/OrderBook.java": "39c94eaa94d28ddbc9f7641aa614e3f2ec645c7dc483130a004eb0b348942c87",
+    "src/main/java/dev/sam/exchange/engine/RejectResult.java": "b252f90e185dd91292a727a059e51980a9305dd574524f90077969a1926d1121",
+    "src/main/java/dev/sam/exchange/engine/Side.java": "13869c131cccde5bb0d22b7e87c52ab65576c6ffdb25e4aab7de1bd385d78ecd",
+    "src/main/java/dev/sam/exchange/engine/PlaceResult.java": "c82d519c5a0ee174200c663019cd115671a0533222ad9b99306f20027a79e437",
+    "src/main/java/dev/sam/exchange/engine/CancelOrder.java": "bd90ad93a35c15c57f3a6fe76c04aacdd60371e18f3a38180ec297b6d4c5349e",
+    "src/main/java/dev/sam/exchange/engine/Trade.java": "e14601e0479af2e54696d615665a24e3f5ccc13e3ead4c05092437f75ebd3d36",
+    "src/main/java/dev/sam/exchange/engine/RestingOrder.java": "24b4a49bbe03ace8198ae2d036059bbc0b8145a3db183ddff689e1a7e4e74ff4",
+    "src/main/java/dev/sam/exchange/engine/ReplayResult.java": "0572239822fb45ee5fe4392e37c332745c0367bad2bd2777209b35254145e2e7",
+    "src/main/java/dev/sam/exchange/engine/PriceLevel.java": "37a944118919299eb7a9b6f577bb7cacfbbf25cb9eb775bef42dd53850e67c02",
+    "src/main/java/dev/sam/exchange/engine/EngineCommand.java": "70b40d61bf4dc37690f9e1ce3793d91d7c4910b46c51aafdb8e87ec3bd13c2f6",
+    "src/main/java/dev/sam/exchange/engine/OrderSnapshot.java": "671c9b50f1d68f8259d08082e8162e26d6ca8f09db586bdc4e805a10a621e81e",
+    "src/main/java/dev/sam/exchange/engine/MatchingEngine.java": "c1f018e8346daeb8965b318288b9bcc5510431fe9b44e02195d8e9b6a6099d9c",
+    "src/main/java/dev/sam/exchange/engine/CommandResult.java": "d2febacb76d605424d9452dba242fc39352cca6e29b974713340439e0c8853c8",
+    "src/main/java/dev/sam/exchange/engine/PlaceOrder.java": "77e558c02e885e2bbaf837a093fe899d9c71764018df42803e373da4c3326e5d",
+    "src/main/java/dev/sam/exchange/gateway/GrpcLatencyBenchmark.java": "a8bede40fc9e8cc2ffcaf4838248289f064a8fac6924285bc03b8627738842e5",
+    "src/main/java/dev/sam/exchange/gateway/GrpcGatewayServer.java": "2ec5269d609eb2054d649edf36a790d63171bcc2ab586584bb950b8ff7687018",
+    "src/main/java/dev/sam/exchange/gateway/GatewayDiagnostics.java": "83d4d82b1025ec71f660aaf4a1f75cb6741a022e452fe42f7a51b8352d5fe32c",
+    "src/main/java/dev/sam/exchange/gateway/GrpcCommandMapper.java": "0f9d81b77761e6e85f3efb4bfcfc9ca6910a5bc796fdf8b06ab035c4e0c35942",
+    "src/main/java/dev/sam/exchange/gateway/InFlightRequest.java": "572de222d299370b7d7510f69d9331ffc5cf29b42890e3de4885ba417de9c5a1",
+    "src/main/java/dev/sam/exchange/gateway/PendingRequest.java": "79bffeea6e162687cd3f347fae2b37396f5a403ff7523b1167b179be03acad63",
+    "src/main/java/dev/sam/exchange/gateway/GrpcExchangeService.java": "a86d2e51acf6d3844dc2136fea481dba81c3679760af69149852ad7c73cff462",
+    "src/main/java/dev/sam/exchange/gateway/GrpcGatewayClient.java": "469a41acee6aa0a0ce54fb4515d8f7f4b9700fb03db9eed1855feb7b4d20c87d",
+    "src/main/java/dev/sam/exchange/gateway/EngineGateway.java": "e923ed6f40c9f875da5af8d6155bfd4378d6314dfede40087b6fefcd4abed745",
+    "src/main/resources/sbe/orders.xml": "2f37a7ad3de6409b1ce665a747ba45ddb0accdd414073748263c58c5595beca6",
+    "src/main/proto/exchange/v1/exchange.proto": "23d4c9f675078fed8fa6af2c9d661557a94ffc1b568d3ad3c7eb262571f26fd9"
+  },
+  "engine_jar_sha256": "2f53857c5106af2fc642dd5200251ca78f6a7d522e2b892a2db5d74c34cf29d2",
+  "implementation_patch_sha256": "12688b6cc84cf7a536ed91b9d9e4cd30d84d0feb3b5f52a2338398b3746f2004",
+  "run_order": [
+    {
+      "profile": "baseline",
+      "round": 1,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 8,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 1,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 1,
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 1,
+      "engine_window": 32,
+      "gateway_window": 32,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 1,
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 16,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 2,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 2,
+      "engine_window": 32,
+      "gateway_window": 32,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 2,
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 2,
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 16,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 2,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 8,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 3,
+      "engine_window": 32,
+      "gateway_window": 32,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 3,
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 3,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 3,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 8,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 3,
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 16,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 4,
+      "engine_window": 32,
+      "gateway_window": 32,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 4,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 8,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 4,
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 4,
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 16,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 4,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 5,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 8,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 5,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 5,
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 16,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 5,
+      "engine_window": 32,
+      "gateway_window": 32,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "baseline",
+      "round": 5,
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 32,
+      "warmup": 500,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "pressure",
+      "round": 1,
+      "engine_window": 32,
+      "gateway_window": 32,
+      "client_window": 256,
+      "warmup": 0,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "pressure",
+      "round": 1,
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 256,
+      "warmup": 0,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "pressure",
+      "round": 1,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 256,
+      "warmup": 0,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "deadline",
+      "round": 1,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 32,
+      "warmup": 0,
+      "deadline_ms": 10
+    },
+    {
+      "profile": "pressure",
+      "round": 2,
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 256,
+      "warmup": 0,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "pressure",
+      "round": 2,
+      "engine_window": 32,
+      "gateway_window": 32,
+      "client_window": 256,
+      "warmup": 0,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "pressure",
+      "round": 2,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 256,
+      "warmup": 0,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "deadline",
+      "round": 2,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 32,
+      "warmup": 0,
+      "deadline_ms": 10
+    },
+    {
+      "profile": "pressure",
+      "round": 3,
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 256,
+      "warmup": 0,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "pressure",
+      "round": 3,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 256,
+      "warmup": 0,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "pressure",
+      "round": 3,
+      "engine_window": 32,
+      "gateway_window": 32,
+      "client_window": 256,
+      "warmup": 0,
+      "deadline_ms": 5000
+    },
+    {
+      "profile": "deadline",
+      "round": 3,
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 32,
+      "warmup": 0,
+      "deadline_ms": 10
+    }
+  ],
+  "finished_at": "2026-10-01T20:50:00.049220+00:00",
+  "completed_runs": 37,
+  "exchange_processes_after": [],
+  "load_average_after": [
+    4.49560546875,
+    3.28515625,
+    2.771484375
+  ],
+  "sources_still_match": true
+}

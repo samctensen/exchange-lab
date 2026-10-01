@@ -1,0 +1,19 @@
+Gateway max in flight: 8
+Gateway queue capacity: 128
+gRPC gateway listening on port 57389
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/Users/sam/.m2/repository/com/google/protobuf/protobuf-java/3.25.9/protobuf-java-3.25.9.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+Gateway diagnostics: lifetime (includes warmup and shutdown drain)
+Gateway accepted: 304
+Gateway queue full: 1237
+Gateway activated: 304
+Gateway queue high-water (observed): 128
+Gateway active high-water: 8
+Gateway queue wait mean: 89533.967 us
+Gateway queue wait max: 120660.208 us
+Gateway successful offers: 304
+Gateway retries: 0
+Gateway offer timeouts: 0
+Gateway reply timeouts: 0

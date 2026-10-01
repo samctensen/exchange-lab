@@ -31,14 +31,20 @@ public class EngineGateway implements AutoCloseable {
   private final Map<UUID, InFlightRequest> inFlight = new LinkedHashMap<>();
   private final int maxInFlight;
   private final SbeRequestCodec requestCodec = new SbeRequestCodec();
+  private final GatewayDiagnostics diagnostics;
 
   public EngineGateway(AeronRequestClient client, int capacity, int maxInFlight) {
+    this(client, capacity, maxInFlight, null);
+  }
+
+  EngineGateway(AeronRequestClient client, int capacity, int maxInFlight, GatewayDiagnostics diagnostics) {
     if (maxInFlight < 1) {
       throw new IllegalArgumentException("maxInFlight must be at least 1");
     }
     this.client = client;
     this.requests = new ArrayBlockingQueue<>(capacity);
     this.maxInFlight = maxInFlight;
+    this.diagnostics = diagnostics;
     this.worker = new Thread(this::runWorker, "engine-gateway");
   }
 
@@ -51,7 +57,7 @@ public class EngineGateway implements AutoCloseable {
       throw new IllegalArgumentException("request must not be null");
     }
     CompletableFuture<CommandResult> result = new CompletableFuture<>();
-    PendingRequest pendingRequest = new PendingRequest(request, result);
+    PendingRequest pendingRequest = new PendingRequest(request, result, diagnostics == null ? 0 : System.nanoTime());
     RejectedExecutionException rejection = null;
     // Admission and shutdown share a lock: a request is either accepted before close or rejected.
     synchronized (lifecycleLock) {
@@ -59,6 +65,11 @@ public class EngineGateway implements AutoCloseable {
         rejection = new RejectedExecutionException("Gateway is not running");
       } else if (!requests.offer(pendingRequest)) {
         rejection = new RejectedExecutionException("request queue is full");
+        if (diagnostics != null)
+          diagnostics.queueFull();
+      } else if (diagnostics != null) {
+        // The worker may dequeue between offer and size; this is an observed high-water mark.
+        diagnostics.accepted(requests.size());
       }
     }
     if (rejection != null) {
@@ -154,8 +165,11 @@ public class EngineGateway implements AutoCloseable {
         break;
       } else {
         requests.poll();
+        long activatedNanos = diagnostics == null ? 0 : System.nanoTime();
         InFlightRequest active = new InFlightRequest(pending, requestCodec, nowNanos + timeoutNanos);
         inFlight.put(requestId, active);
+        if (diagnostics != null)
+          diagnostics.activated(activatedNanos - pending.enqueuedNanos(), inFlight.size());
       }
       workCounter++;
     }
@@ -179,6 +193,8 @@ public class EngineGateway implements AutoCloseable {
       if (active.phase == InFlightRequest.Phase.OFFERING) {
         long result = client.trySend(active.buffer, 0, active.messageLength);
         if (result >= 0) {
+          if (diagnostics != null)
+            diagnostics.offered(active.attempts > 0);
           active.attempts = active.attempts + 1;
           active.phase = InFlightRequest.Phase.AWAITING_REPLY;
           active.deadlineNanos = nowNanos + timeoutNanos;
@@ -205,16 +221,22 @@ public class EngineGateway implements AutoCloseable {
       if (nowNanos - active.deadlineNanos < 0) {
         continue;
       } else if (active.phase == InFlightRequest.Phase.OFFERING) {
+        if (diagnostics != null)
+          diagnostics.timedOut(false);
         iterator.remove();
         String message = "Offer failed for " + active.pending.request().requestId() + "; sending timed out"
             + (active.attempts > 0 ? "; outcome unknown" : "");
         active.pending.result().completeExceptionally(new IllegalStateException(message));
         workCounter++;
       } else if (active.phase == InFlightRequest.Phase.AWAITING_REPLY && active.attempts < maxAttempts) {
+        if (diagnostics != null)
+          diagnostics.timedOut(true);
         active.phase = InFlightRequest.Phase.OFFERING;
         active.deadlineNanos = nowNanos + timeoutNanos;
         workCounter++;
       } else if (active.phase == InFlightRequest.Phase.AWAITING_REPLY && active.attempts >= maxAttempts) {
+        if (diagnostics != null)
+          diagnostics.timedOut(true);
         iterator.remove();
         String message = "No reply after " + active.attempts + " attempts for request "
             + active.pending.request().requestId() + (active.attempts > 0 ? "; outcome unknown" : "");

@@ -2,6 +2,7 @@ package dev.sam.exchange.gateway;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.concurrent.TimeUnit;
 
 import dev.sam.exchange.transport.AeronRequestClient;
@@ -13,6 +14,8 @@ import io.grpc.ServerBuilder;
 
 public class GrpcGatewayServer {
   public static void main(String[] args) throws IOException, InterruptedException {
+    Config config = Config.parse(args);
+    GatewayDiagnostics diagnostics = config.diagnostics() ? new GatewayDiagnostics() : null;
     // Connect to the media driver owned by the server.
     String aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
 
@@ -23,10 +26,11 @@ public class GrpcGatewayServer {
 
       AeronRequestClient client = new AeronRequestClient(publication, replies);
 
-      try (EngineGateway gateway = new EngineGateway(client, 128, 8)) {
+      try (EngineGateway gateway = new EngineGateway(client, config.queueCapacity(), config.maxInFlight(),
+          diagnostics)) {
         gateway.start();
 
-        Server server = ServerBuilder.forPort(50051)
+        Server server = ServerBuilder.forPort(config.port())
             .addService(new GrpcExchangeService(gateway, new GrpcCommandMapper())).build();
 
         try {
@@ -52,6 +56,8 @@ public class GrpcGatewayServer {
             }
           }, "grpc-gateway-shutdown"));
 
+          System.out.println("Gateway max in flight: " + config.maxInFlight());
+          System.out.println("Gateway queue capacity: " + config.queueCapacity());
           System.out.println("gRPC gateway listening on port " + server.getPort());
 
           // Keep main inside the resource blocks while the server runs.
@@ -60,7 +66,43 @@ public class GrpcGatewayServer {
           // Also stop gRPC if main exits because of an exception.
           server.shutdownNow();
         }
+      } finally {
+        if (diagnostics != null)
+          System.out.print(diagnostics.summarize());
       }
+    }
+  }
+
+  private record Config(int port, int queueCapacity, int maxInFlight, boolean diagnostics) {
+    static Config parse(String[] args) {
+      int port = 50051;
+      int queueCapacity = 128;
+      int maxInFlight = 8;
+      boolean diagnostics = false;
+      var seen = new HashSet<String>();
+      for (String arg : args) {
+        String[] parts = arg.split("=", 2);
+        if (!seen.add(parts[0]))
+          throw new IllegalArgumentException("Duplicate gateway argument: " + parts[0]);
+        if (arg.equals("--diagnostics")) {
+          diagnostics = true;
+          continue;
+        }
+        if (parts.length != 2)
+          throw new IllegalArgumentException(
+              "Expected --port=n, --queue-capacity=n, --max-in-flight=n or --diagnostics");
+        int value = Integer.parseInt(parts[1]);
+        switch (parts[0]) {
+          case "--port" -> port = value;
+          case "--queue-capacity" -> queueCapacity = value;
+          case "--max-in-flight" -> maxInFlight = value;
+          default -> throw new IllegalArgumentException("Unknown gateway argument: " + parts[0]);
+        }
+      }
+      if (port < 0 || port > 65535 || queueCapacity < 1 || maxInFlight < 1) {
+        throw new IllegalArgumentException("Port must be 0..65535; queue capacity and max in flight must be positive");
+      }
+      return new Config(port, queueCapacity, maxInFlight, diagnostics);
     }
   }
 }

@@ -1,0 +1,36 @@
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/Users/sam/.m2/repository/com/google/protobuf/protobuf-java/3.25.9/protobuf-java-3.25.9.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+Warmup: 0 requests
+Max in flight: 256
+RPC deadline: 5000 ms
+Application RPCs per request: 1; channel retries disabled
+Completed: 2000 requests
+Successful: 296 requests
+RPC failures: 1704
+Peak outstanding: 256
+Completion throughput: 3970.377 requests/s
+Successful throughput: 587.616 requests/s
+Status CANCELLED: 0
+Status UNKNOWN: 0
+Status INVALID_ARGUMENT: 0
+Status DEADLINE_EXCEEDED: 0
+Status NOT_FOUND: 0
+Status ALREADY_EXISTS: 0
+Status PERMISSION_DENIED: 0
+Status RESOURCE_EXHAUSTED: 0
+Status FAILED_PRECONDITION: 0
+Status ABORTED: 0
+Status OUT_OF_RANGE: 0
+Status UNIMPLEMENTED: 0
+Status INTERNAL: 0
+Status UNAVAILABLE: 1704
+Status DATA_LOSS: 0
+Status UNAUTHENTICATED: 0
+Terminal p50: 8469.625 us
+Terminal p99: 320961.292 us
+Terminal max: 328935.542 us
+Success p50: 139631.083 us
+Success p99: 327283.125 us
+Success max: 328935.542 us

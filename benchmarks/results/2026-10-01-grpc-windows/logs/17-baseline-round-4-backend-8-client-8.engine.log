@@ -1,0 +1,11 @@
+Server ready: /private/tmp/exchange-grpc-measure-jumnhcl3/exchange-lab-aeron
+Archive: /private/tmp/exchange-grpc-measure-jumnhcl3/archive
+Request recording: 0
+Engine log window: 8
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=1.979 p50=0.792 p99=13.458 max=44.625 us
+Recording observation: mean=6924.916 p50=7047.375 p99=9713.625 max=13611.000 us
+Process and encode: mean=1.186 p50=0.292 p99=9.125 max=60.042 us
+Reply offer: mean=0.812 p50=0.250 p99=8.333 max=32.500 us
+Server total: mean=6928.894 p50=7051.917 p99=9716.583 max=13617.833 us

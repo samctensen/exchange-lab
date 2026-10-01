@@ -1,0 +1,1107 @@
+{
+  "aggregation": "Median and full range of per-run statistics. Percentiles are not pooled. Gateway metrics include warmup and shutdown drain.",
+  "groups": [
+    {
+      "profile": "baseline",
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 8,
+      "runs": 5,
+      "successful_rps": {
+        "median": 1030.861,
+        "min": 1008.722,
+        "max": 1060.773
+      },
+      "completion_rps": {
+        "median": 1030.861,
+        "min": 1008.722,
+        "max": 1060.773
+      },
+      "success_p50_us": {
+        "median": 7892.084,
+        "min": 7761.625,
+        "max": 7953.084
+      },
+      "success_p99_us": {
+        "median": 9415.5,
+        "min": 8186.208,
+        "max": 10089.25
+      },
+      "success_max_us": {
+        "median": 13707.084,
+        "min": 9184.709,
+        "max": 18955.541
+      },
+      "terminal_p50_us": {
+        "median": 7892.084,
+        "min": 7761.625,
+        "max": 7953.084
+      },
+      "terminal_p99_us": {
+        "median": 9415.5,
+        "min": 8186.208,
+        "max": 10089.25
+      },
+      "successful": {
+        "median": 2000,
+        "min": 2000,
+        "max": 2000
+      },
+      "rpc_failures": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "status_deadline_exceeded": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "status_unavailable": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "gateway_accepted": {
+        "median": 2500,
+        "min": 2500,
+        "max": 2500
+      },
+      "gateway_queue_full": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "gateway_queue_high_water": {
+        "median": 7,
+        "min": 7,
+        "max": 7
+      },
+      "gateway_active_high_water": {
+        "median": 8,
+        "min": 8,
+        "max": 8
+      },
+      "queue_wait_mean_us": {
+        "median": 11.127,
+        "min": 10.188,
+        "max": 13.402
+      },
+      "queue_wait_max_us": {
+        "median": 1483.084,
+        "min": 1353.042,
+        "max": 1706.209
+      },
+      "server_total_mean_us": {
+        "median": 7185.188,
+        "min": 6928.894,
+        "max": 7496.613
+      },
+      "server_total_p99_us": {
+        "median": 8565.75,
+        "min": 7845.333,
+        "max": 9716.583
+      },
+      "failure_pct": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "accepted_without_successful_client_reply": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "profile": "baseline",
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 32,
+      "runs": 5,
+      "successful_rps": {
+        "median": 1007.868,
+        "min": 1003.694,
+        "max": 1076.506
+      },
+      "completion_rps": {
+        "median": 1007.868,
+        "min": 1003.694,
+        "max": 1076.506
+      },
+      "success_p50_us": {
+        "median": 31924.917,
+        "min": 29888.125,
+        "max": 31944.834
+      },
+      "success_p99_us": {
+        "median": 35893.333,
+        "min": 33044.125,
+        "max": 37906.166
+      },
+      "success_max_us": {
+        "median": 37068.416,
+        "min": 34055.917,
+        "max": 38618.75
+      },
+      "terminal_p50_us": {
+        "median": 31924.917,
+        "min": 29888.125,
+        "max": 31944.834
+      },
+      "terminal_p99_us": {
+        "median": 35893.333,
+        "min": 33044.125,
+        "max": 37906.166
+      },
+      "successful": {
+        "median": 2000,
+        "min": 2000,
+        "max": 2000
+      },
+      "rpc_failures": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "status_deadline_exceeded": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "status_unavailable": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "gateway_accepted": {
+        "median": 2500,
+        "min": 2500,
+        "max": 2500
+      },
+      "gateway_queue_full": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "gateway_queue_high_water": {
+        "median": 31,
+        "min": 31,
+        "max": 31
+      },
+      "gateway_active_high_water": {
+        "median": 8,
+        "min": 8,
+        "max": 8
+      },
+      "queue_wait_mean_us": {
+        "median": 22900.175,
+        "min": 21373.068,
+        "max": 23014.82
+      },
+      "queue_wait_max_us": {
+        "median": 29887.5,
+        "min": 27634.083,
+        "max": 32319.292
+      },
+      "server_total_mean_us": {
+        "median": 7859.696,
+        "min": 7347.296,
+        "max": 7908.224
+      },
+      "server_total_p99_us": {
+        "median": 8900.125,
+        "min": 8067.292,
+        "max": 9924.125
+      },
+      "failure_pct": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "accepted_without_successful_client_reply": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "profile": "baseline",
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 16,
+      "runs": 5,
+      "successful_rps": {
+        "median": 2050.415,
+        "min": 2025.052,
+        "max": 2139.652
+      },
+      "completion_rps": {
+        "median": 2050.415,
+        "min": 2025.052,
+        "max": 2139.652
+      },
+      "success_p50_us": {
+        "median": 7880.375,
+        "min": 7136.083,
+        "max": 7920.792
+      },
+      "success_p99_us": {
+        "median": 8919.416,
+        "min": 8475.584,
+        "max": 9081.125
+      },
+      "success_max_us": {
+        "median": 9337.292,
+        "min": 9211.458,
+        "max": 10039.959
+      },
+      "terminal_p50_us": {
+        "median": 7880.375,
+        "min": 7136.083,
+        "max": 7920.792
+      },
+      "terminal_p99_us": {
+        "median": 8919.416,
+        "min": 8475.584,
+        "max": 9081.125
+      },
+      "successful": {
+        "median": 2000,
+        "min": 2000,
+        "max": 2000
+      },
+      "rpc_failures": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "status_deadline_exceeded": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "status_unavailable": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "gateway_accepted": {
+        "median": 2500,
+        "min": 2500,
+        "max": 2500
+      },
+      "gateway_queue_full": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "gateway_queue_high_water": {
+        "median": 15,
+        "min": 15,
+        "max": 15
+      },
+      "gateway_active_high_water": {
+        "median": 16,
+        "min": 16,
+        "max": 16
+      },
+      "queue_wait_mean_us": {
+        "median": 20.505,
+        "min": 18.866,
+        "max": 23.041
+      },
+      "queue_wait_max_us": {
+        "median": 2106.166,
+        "min": 1580.084,
+        "max": 2296.958
+      },
+      "server_total_mean_us": {
+        "median": 7001.371,
+        "min": 6638.465,
+        "max": 7228.646
+      },
+      "server_total_p99_us": {
+        "median": 8218.166,
+        "min": 7706.709,
+        "max": 8593.167
+      },
+      "failure_pct": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "accepted_without_successful_client_reply": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "profile": "baseline",
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 32,
+      "runs": 5,
+      "successful_rps": {
+        "median": 2029.271,
+        "min": 2008.523,
+        "max": 2179.291
+      },
+      "completion_rps": {
+        "median": 2029.271,
+        "min": 2008.523,
+        "max": 2179.291
+      },
+      "success_p50_us": {
+        "median": 15881.541,
+        "min": 14485.125,
+        "max": 15921.542
+      },
+      "success_p99_us": {
+        "median": 17792.584,
+        "min": 16207.625,
+        "max": 21901.833
+      },
+      "success_max_us": {
+        "median": 18116.792,
+        "min": 16367.125,
+        "max": 23078.792
+      },
+      "terminal_p50_us": {
+        "median": 15881.541,
+        "min": 14485.125,
+        "max": 15921.542
+      },
+      "terminal_p99_us": {
+        "median": 17792.584,
+        "min": 16207.625,
+        "max": 21901.833
+      },
+      "successful": {
+        "median": 2000,
+        "min": 2000,
+        "max": 2000
+      },
+      "rpc_failures": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "status_deadline_exceeded": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "status_unavailable": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "gateway_accepted": {
+        "median": 2500,
+        "min": 2500,
+        "max": 2500
+      },
+      "gateway_queue_full": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "gateway_queue_high_water": {
+        "median": 31,
+        "min": 31,
+        "max": 31
+      },
+      "gateway_active_high_water": {
+        "median": 16,
+        "min": 16,
+        "max": 16
+      },
+      "queue_wait_mean_us": {
+        "median": 6975.266,
+        "min": 6068.241,
+        "max": 7077.595
+      },
+      "queue_wait_max_us": {
+        "median": 16777.542,
+        "min": 15866.25,
+        "max": 17466.417
+      },
+      "server_total_mean_us": {
+        "median": 7775.968,
+        "min": 7185.595,
+        "max": 7864.855
+      },
+      "server_total_p99_us": {
+        "median": 8062.541,
+        "min": 8057.75,
+        "max": 10849.375
+      },
+      "failure_pct": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "accepted_without_successful_client_reply": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "profile": "baseline",
+      "engine_window": 32,
+      "gateway_window": 32,
+      "client_window": 32,
+      "runs": 5,
+      "successful_rps": {
+        "median": 4018.261,
+        "min": 3994.044,
+        "max": 4058.58
+      },
+      "completion_rps": {
+        "median": 4018.261,
+        "min": 3994.044,
+        "max": 4058.58
+      },
+      "success_p50_us": {
+        "median": 7822.458,
+        "min": 7815.542,
+        "max": 7862.083
+      },
+      "success_p99_us": {
+        "median": 8872.875,
+        "min": 8319.667,
+        "max": 9571.375
+      },
+      "success_max_us": {
+        "median": 10003.292,
+        "min": 8605.125,
+        "max": 10411.375
+      },
+      "terminal_p50_us": {
+        "median": 7822.458,
+        "min": 7815.542,
+        "max": 7862.083
+      },
+      "terminal_p99_us": {
+        "median": 8872.875,
+        "min": 8319.667,
+        "max": 9571.375
+      },
+      "successful": {
+        "median": 2000,
+        "min": 2000,
+        "max": 2000
+      },
+      "rpc_failures": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "status_deadline_exceeded": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "status_unavailable": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "gateway_accepted": {
+        "median": 2500,
+        "min": 2500,
+        "max": 2500
+      },
+      "gateway_queue_full": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "gateway_queue_high_water": {
+        "median": 31,
+        "min": 31,
+        "max": 31
+      },
+      "gateway_active_high_water": {
+        "median": 32,
+        "min": 32,
+        "max": 32
+      },
+      "queue_wait_mean_us": {
+        "median": 39.484,
+        "min": 32.681,
+        "max": 55.607
+      },
+      "queue_wait_max_us": {
+        "median": 2086.791,
+        "min": 1790.666,
+        "max": 3034.541
+      },
+      "server_total_mean_us": {
+        "median": 6512.813,
+        "min": 6426.44,
+        "max": 6745.97
+      },
+      "server_total_p99_us": {
+        "median": 7731.75,
+        "min": 7587.459,
+        "max": 8442.5
+      },
+      "failure_pct": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "accepted_without_successful_client_reply": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "profile": "deadline",
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 32,
+      "runs": 3,
+      "successful_rps": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "completion_rps": {
+        "median": 5225.879,
+        "min": 5195.691,
+        "max": 5291.412
+      },
+      "success_p50_us": null,
+      "success_p99_us": null,
+      "success_max_us": null,
+      "terminal_p50_us": {
+        "median": 2553.75,
+        "min": 2543.75,
+        "max": 2556.583
+      },
+      "terminal_p99_us": {
+        "median": 22269.834,
+        "min": 21384.625,
+        "max": 23175.125
+      },
+      "successful": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "rpc_failures": {
+        "median": 2000,
+        "min": 2000,
+        "max": 2000
+      },
+      "status_deadline_exceeded": {
+        "median": 763,
+        "min": 755,
+        "max": 767
+      },
+      "status_unavailable": {
+        "median": 1237,
+        "min": 1233,
+        "max": 1245
+      },
+      "gateway_accepted": {
+        "median": 304,
+        "min": 296,
+        "max": 305
+      },
+      "gateway_queue_full": {
+        "median": 1237,
+        "min": 1233,
+        "max": 1245
+      },
+      "gateway_queue_high_water": {
+        "median": 128,
+        "min": 128,
+        "max": 128
+      },
+      "gateway_active_high_water": {
+        "median": 8,
+        "min": 8,
+        "max": 8
+      },
+      "queue_wait_mean_us": {
+        "median": 90234.697,
+        "min": 89533.967,
+        "max": 92378.273
+      },
+      "queue_wait_max_us": {
+        "median": 126169.208,
+        "min": 120660.208,
+        "max": 136249.292
+      },
+      "server_total_mean_us": {
+        "median": 7350.919,
+        "min": 7046.745,
+        "max": 7370.22
+      },
+      "server_total_p99_us": {
+        "median": 8905.042,
+        "min": 7941.625,
+        "max": 15884.959
+      },
+      "failure_pct": {
+        "median": 100.0,
+        "min": 100.0,
+        "max": 100.0
+      },
+      "accepted_without_successful_client_reply": {
+        "median": 304,
+        "min": 296,
+        "max": 305
+      }
+    },
+    {
+      "profile": "pressure",
+      "engine_window": 8,
+      "gateway_window": 8,
+      "client_window": 256,
+      "runs": 3,
+      "successful_rps": {
+        "median": 559.114,
+        "min": 548.524,
+        "max": 587.616
+      },
+      "completion_rps": {
+        "median": 3970.377,
+        "min": 3904.086,
+        "max": 4066.284
+      },
+      "success_p50_us": {
+        "median": 215859.959,
+        "min": 139631.083,
+        "max": 227363.791
+      },
+      "success_p99_us": {
+        "median": 327283.125,
+        "min": 321671.333,
+        "max": 340734.667
+      },
+      "success_max_us": {
+        "median": 328935.542,
+        "min": 325613.666,
+        "max": 340898.208
+      },
+      "terminal_p50_us": {
+        "median": 8118.333,
+        "min": 7873.708,
+        "max": 8469.625
+      },
+      "terminal_p99_us": {
+        "median": 320961.292,
+        "min": 310648.625,
+        "max": 332158.5
+      },
+      "successful": {
+        "median": 281,
+        "min": 275,
+        "max": 296
+      },
+      "rpc_failures": {
+        "median": 1719,
+        "min": 1704,
+        "max": 1725
+      },
+      "status_deadline_exceeded": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "status_unavailable": {
+        "median": 1719,
+        "min": 1704,
+        "max": 1725
+      },
+      "gateway_accepted": {
+        "median": 281,
+        "min": 275,
+        "max": 296
+      },
+      "gateway_queue_full": {
+        "median": 1719,
+        "min": 1704,
+        "max": 1725
+      },
+      "gateway_queue_high_water": {
+        "median": 128,
+        "min": 128,
+        "max": 128
+      },
+      "gateway_active_high_water": {
+        "median": 8,
+        "min": 8,
+        "max": 8
+      },
+      "queue_wait_mean_us": {
+        "median": 96544.393,
+        "min": 95894.813,
+        "max": 101068.692
+      },
+      "queue_wait_max_us": {
+        "median": 129242.625,
+        "min": 124447.375,
+        "max": 131873.125
+      },
+      "server_total_mean_us": {
+        "median": 7362.953,
+        "min": 6975.36,
+        "max": 7476.588
+      },
+      "server_total_p99_us": {
+        "median": 8177.959,
+        "min": 7969.959,
+        "max": 8745.75
+      },
+      "failure_pct": {
+        "median": 85.95,
+        "min": 85.2,
+        "max": 86.25
+      },
+      "accepted_without_successful_client_reply": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "profile": "pressure",
+      "engine_window": 16,
+      "gateway_window": 16,
+      "client_window": 256,
+      "runs": 3,
+      "successful_rps": {
+        "median": 1059.594,
+        "min": 995.507,
+        "max": 1099.384
+      },
+      "completion_rps": {
+        "median": 4557.394,
+        "min": 4487.281,
+        "max": 4608.829
+      },
+      "success_p50_us": {
+        "median": 73319.083,
+        "min": 72859.042,
+        "max": 76774.333
+      },
+      "success_p99_us": {
+        "median": 262540.458,
+        "min": 262251.083,
+        "max": 270657.042
+      },
+      "success_max_us": {
+        "median": 264662.667,
+        "min": 264152.334,
+        "max": 270768.666
+      },
+      "terminal_p50_us": {
+        "median": 7866.5,
+        "min": 7263.0,
+        "max": 8157.75
+      },
+      "terminal_p99_us": {
+        "median": 258895.916,
+        "min": 257414.334,
+        "max": 265614.041
+      },
+      "successful": {
+        "median": 465,
+        "min": 432,
+        "max": 490
+      },
+      "rpc_failures": {
+        "median": 1535,
+        "min": 1510,
+        "max": 1568
+      },
+      "status_deadline_exceeded": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "status_unavailable": {
+        "median": 1535,
+        "min": 1510,
+        "max": 1568
+      },
+      "gateway_accepted": {
+        "median": 465,
+        "min": 432,
+        "max": 490
+      },
+      "gateway_queue_full": {
+        "median": 1535,
+        "min": 1510,
+        "max": 1568
+      },
+      "gateway_queue_high_water": {
+        "median": 128,
+        "min": 128,
+        "max": 128
+      },
+      "gateway_active_high_water": {
+        "median": 16,
+        "min": 16,
+        "max": 16
+      },
+      "queue_wait_mean_us": {
+        "median": 49980.679,
+        "min": 48379.154,
+        "max": 52627.098
+      },
+      "queue_wait_max_us": {
+        "median": 64895.625,
+        "min": 63391.375,
+        "max": 69246.375
+      },
+      "server_total_mean_us": {
+        "median": 6608.599,
+        "min": 6502.007,
+        "max": 7060.643
+      },
+      "server_total_p99_us": {
+        "median": 7879.208,
+        "min": 7762.125,
+        "max": 9231.458
+      },
+      "failure_pct": {
+        "median": 76.75,
+        "min": 75.5,
+        "max": 78.4
+      },
+      "accepted_without_successful_client_reply": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "profile": "pressure",
+      "engine_window": 32,
+      "gateway_window": 32,
+      "client_window": 256,
+      "runs": 3,
+      "successful_rps": {
+        "median": 1894.483,
+        "min": 1881.868,
+        "max": 1986.392
+      },
+      "completion_rps": {
+        "median": 4837.706,
+        "min": 4780.726,
+        "max": 4927.133
+      },
+      "success_p50_us": {
+        "median": 43878.792,
+        "min": 43503.292,
+        "max": 44646.958
+      },
+      "success_p99_us": {
+        "median": 240510.416,
+        "min": 236000.75,
+        "max": 242420.209
+      },
+      "success_max_us": {
+        "median": 244996.083,
+        "min": 244094.209,
+        "max": 247626.584
+      },
+      "terminal_p50_us": {
+        "median": 10193.75,
+        "min": 9382.292,
+        "max": 10812.542
+      },
+      "terminal_p99_us": {
+        "median": 236553.916,
+        "min": 233092.083,
+        "max": 237771.834
+      },
+      "successful": {
+        "median": 778,
+        "min": 769,
+        "max": 831
+      },
+      "rpc_failures": {
+        "median": 1222,
+        "min": 1169,
+        "max": 1231
+      },
+      "status_deadline_exceeded": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "status_unavailable": {
+        "median": 1222,
+        "min": 1169,
+        "max": 1231
+      },
+      "gateway_accepted": {
+        "median": 778,
+        "min": 769,
+        "max": 831
+      },
+      "gateway_queue_full": {
+        "median": 1222,
+        "min": 1169,
+        "max": 1231
+      },
+      "gateway_queue_high_water": {
+        "median": 128,
+        "min": 128,
+        "max": 128
+      },
+      "gateway_active_high_water": {
+        "median": 32,
+        "min": 32,
+        "max": 32
+      },
+      "queue_wait_mean_us": {
+        "median": 25202.492,
+        "min": 24828.441,
+        "max": 25321.7
+      },
+      "queue_wait_max_us": {
+        "median": 39178.75,
+        "min": 37050.834,
+        "max": 39479.875
+      },
+      "server_total_mean_us": {
+        "median": 6593.304,
+        "min": 6529.58,
+        "max": 6689.064
+      },
+      "server_total_p99_us": {
+        "median": 8003.708,
+        "min": 7830.75,
+        "max": 9335.125
+      },
+      "failure_pct": {
+        "median": 61.1,
+        "min": 58.45,
+        "max": 61.55
+      },
+      "accepted_without_successful_client_reply": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "baseline_engine_client": [
+        8,
+        8
+      ],
+      "candidate_engine_client": [
+        16,
+        16
+      ],
+      "aggregation": "Candidate / baseline within each round; gateway window equals engine window.",
+      "successful_rps": {
+        "median_ratio": 1.9967113584619276,
+        "min_ratio": 1.9329441831569998,
+        "max_ratio": 2.0755970009535716
+      },
+      "success_p50_us": {
+        "median_ratio": 0.9959396883020474,
+        "min_ratio": 0.9042076845608841,
+        "max_ratio": 1.012653020469296
+      },
+      "success_p99_us": {
+        "median_ratio": 0.9644867505708672,
+        "min_ratio": 0.8765889436776767,
+        "max_ratio": 1.0353492117473684
+      }
+    },
+    {
+      "baseline_engine_client": [
+        8,
+        8
+      ],
+      "candidate_engine_client": [
+        32,
+        32
+      ],
+      "aggregation": "Candidate / baseline within each round; gateway window equals engine window.",
+      "successful_rps": {
+        "median_ratio": 3.932629604073545,
+        "min_ratio": 3.7652202686154346,
+        "max_ratio": 3.9835167667603164
+      },
+      "success_p50_us": {
+        "median_ratio": 0.9910035169417862,
+        "min_ratio": 0.9835754280980812,
+        "max_ratio": 1.0069466123395552
+      },
+      "success_p99_us": {
+        "median_ratio": 0.9486706147632381,
+        "min_ratio": 0.8836139344697572,
+        "max_ratio": 1.083880961734664
+      }
+    },
+    {
+      "baseline_engine_client": [
+        8,
+        32
+      ],
+      "candidate_engine_client": [
+        16,
+        32
+      ],
+      "aggregation": "Candidate / baseline within each round; gateway window equals engine window.",
+      "successful_rps": {
+        "median_ratio": 2.0218024617064563,
+        "min_ratio": 1.9928433088459996,
+        "max_ratio": 2.03165747603243
+      },
+      "success_p50_us": {
+        "median_ratio": 0.49742261925668485,
+        "min_ratio": 0.4846448213128124,
+        "max_ratio": 0.4987736900431137
+      },
+      "success_p99_us": {
+        "median_ratio": 0.5253043606625136,
+        "min_ratio": 0.4437189979577764,
+        "max_ratio": 0.5777907741975277
+      }
+    },
+    {
+      "baseline_engine_client": [
+        8,
+        32
+      ],
+      "candidate_engine_client": [
+        32,
+        32
+      ],
+      "aggregation": "Candidate / baseline within each round; gateway window equals engine window.",
+      "successful_rps": {
+        "median_ratio": 3.981651992343144,
+        "min_ratio": 3.7101920472342926,
+        "max_ratio": 4.0354407825528416
+      },
+      "success_p50_us": {
+        "median_ratio": 0.2454037459225989,
+        "min_ratio": 0.24487395990224897,
+        "max_ratio": 0.261493218460509
+      },
+      "success_p99_us": {
+        "median_ratio": 0.25177446822998034,
+        "min_ratio": 0.23418926364479167,
+        "max_ratio": 0.26666163880629307
+      }
+    }
+  ]
+}

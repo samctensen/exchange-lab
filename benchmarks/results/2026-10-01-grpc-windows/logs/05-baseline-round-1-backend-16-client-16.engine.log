@@ -1,0 +1,11 @@
+Server ready: /private/tmp/exchange-grpc-measure-zilry31h/exchange-lab-aeron
+Archive: /private/tmp/exchange-grpc-measure-zilry31h/archive
+Request recording: 0
+Engine log window: 16
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=1.587 p50=0.666 p99=15.666 max=116.083 us
+Recording observation: mean=7041.551 p50=7193.917 p99=8419.666 max=9044.375 us
+Process and encode: mean=0.615 p50=0.167 p99=5.959 max=81.458 us
+Reply offer: mean=0.463 p50=0.167 p99=6.042 max=25.375 us
+Server total: mean=7044.217 p50=7196.541 p99=8420.917 max=9053.208 us

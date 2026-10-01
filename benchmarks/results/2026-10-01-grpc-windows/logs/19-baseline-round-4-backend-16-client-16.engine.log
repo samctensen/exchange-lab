@@ -1,0 +1,11 @@
+Server ready: /private/tmp/exchange-grpc-measure-4fcw6r0x/exchange-lab-aeron
+Archive: /private/tmp/exchange-grpc-measure-4fcw6r0x/archive
+Request recording: 0
+Engine log window: 16
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=1.719 p50=0.667 p99=16.375 max=152.959 us
+Recording observation: mean=6850.846 p50=6945.833 p99=7705.083 max=8416.292 us
+Process and encode: mean=1.028 p50=0.250 p99=11.542 max=148.666 us
+Reply offer: mean=0.632 p50=0.167 p99=7.417 max=46.125 us
+Server total: mean=6854.226 p50=6947.875 p99=7706.709 max=8429.417 us
