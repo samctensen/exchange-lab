@@ -1,0 +1,202 @@
+diff --git a/src/main/java/dev/sam/exchange/transport/AeronLatencyBenchmark.java b/src/main/java/dev/sam/exchange/transport/AeronLatencyBenchmark.java
+index dad9aa3..9cd4114 100644
+--- a/src/main/java/dev/sam/exchange/transport/AeronLatencyBenchmark.java
++++ b/src/main/java/dev/sam/exchange/transport/AeronLatencyBenchmark.java
+@@ -11,6 +11,7 @@ import java.util.Map;
+ import java.util.UUID;
+ 
+ import org.agrona.ExpandableArrayBuffer;
++import org.agrona.BitUtil;
+ import org.agrona.concurrent.BusySpinIdleStrategy;
+ import org.agrona.concurrent.IdleStrategy;
+ import org.agrona.concurrent.NanoClock;
+@@ -23,6 +24,8 @@ import dev.sam.exchange.protocol.SbeRequestCodec;
+ import io.aeron.Aeron;
+ import io.aeron.Publication;
+ import io.aeron.Subscription;
++import io.aeron.logbuffer.FrameDescriptor;
++import io.aeron.protocol.DataHeaderFlyweight;
+ 
+ public class AeronLatencyBenchmark {
+   private static final int DEFAULT_WARMUP_COUNT = 500;
+@@ -36,9 +39,9 @@ public class AeronLatencyBenchmark {
+   }
+ 
+   public static void main(String[] args) {
+-    if (args.length > 4) {
++    if (args.length > 5 || (args.length == 5 && !"--archive-counters".equals(args[4]))) {
+       throw new IllegalArgumentException(
+-          "Usage: AeronLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight] [sleep|spin]");
++          "Usage: AeronLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight] [sleep|spin] [--archive-counters]");
+     }
+     int warmupCount = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_WARMUP_COUNT;
+     int sampleCount = args.length > 1 ? Integer.parseInt(args[1]) : DEFAULT_SAMPLE_COUNT;
+@@ -53,16 +56,35 @@ public class AeronLatencyBenchmark {
+     // Use a separate server with a fresh archive directory and --quiet for a comparable baseline.
+     String aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
+     Measurement measured;
++    String archiveReport = "";
+     try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectory));
+         Publication publication = aeron.addPublication("aeron:ipc", 1);
+         Subscription replies = aeron.addSubscription("aeron:ipc", 2)) {
+       // A timeout fails this run; automatic resends would change the workload being measured.
+       AeronRequestClient client = new AeronRequestClient(publication, replies,
+           new ClientConfig(Duration.ofSeconds(5), 1));
++      ArchiveWriteCounters counters = args.length == 5 ? ArchiveWriteCounters.find(aeron.countersReader()) : null;
++      // This workload uses one fixed-size, unfragmented cancel frame per fresh request.
++      int encodedLength = new SbeRequestCodec().encode(new CommandRequest(new UUID(0, 0), new CancelOrder(1)),
++          new ExpandableArrayBuffer(64), 0);
++      long recordedBytesPerRequest = BitUtil.align(encodedLength + DataHeaderFlyweight.HEADER_LENGTH,
++          FrameDescriptor.FRAME_ALIGNMENT);
++      if (counters != null) {
++        if (encodedLength > publication.maxPayloadLength())
++          throw new IllegalStateException("Archive counter diagnostics require unfragmented benchmark requests");
++        counters.awaitSnapshot(0);
++      }
+ 
+       // Drain all warmup replies before starting the measured phase.
+       measure(client, warmupCount, maxInFlight, SystemNanoClock.INSTANCE, idle);
++      ArchiveWriteCounters.Snapshot before = counters == null
++          ? null
++          : counters.awaitSnapshot(warmupCount * recordedBytesPerRequest);
+       measured = measure(client, sampleCount, maxInFlight, SystemNanoClock.INSTANCE, idle);
++      if (counters != null) {
++        var after = counters.awaitSnapshot(((long) warmupCount + sampleCount) * recordedBytesPerRequest);
++        archiveReport = counters.summarize(before, after, measured.elapsedNanos());
++      }
+     }
+ 
+     // Sorting and console output happen after every measured request has completed successfully.
+@@ -71,6 +93,7 @@ public class AeronLatencyBenchmark {
+     System.out.println("Max in flight: " + maxInFlight);
+     System.out.println("Client idle strategy: " + idleMode);
+     System.out.print(summarize(measured));
++    System.out.print(archiveReport);
+   }
+ 
+   static IdleStrategy idleStrategy(String mode) {
+diff --git a/src/main/java/dev/sam/exchange/transport/ArchiveWriteCounters.java b/src/main/java/dev/sam/exchange/transport/ArchiveWriteCounters.java
+new file mode 100644
+index 0000000..b1ec2f2
+--- /dev/null
++++ b/src/main/java/dev/sam/exchange/transport/ArchiveWriteCounters.java
+@@ -0,0 +1,119 @@
++package dev.sam.exchange.transport;
++
++import static io.aeron.AeronCounters.ARCHIVE_RECORDER_MAX_WRITE_TIME_TYPE_ID;
++import static io.aeron.AeronCounters.ARCHIVE_RECORDER_TOTAL_WRITE_BYTES_TYPE_ID;
++import static io.aeron.AeronCounters.ARCHIVE_RECORDER_TOTAL_WRITE_TIME_TYPE_ID;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Locale;
++import java.util.concurrent.TimeUnit;
++
++import org.agrona.concurrent.IdleStrategy;
++import org.agrona.concurrent.NanoClock;
++import org.agrona.concurrent.SleepingIdleStrategy;
++import org.agrona.concurrent.SystemNanoClock;
++import org.agrona.concurrent.status.CountersReader;
++
++import io.aeron.Aeron;
++import io.aeron.archive.ArchiveCounters;
++
++/** Read-only benchmark diagnostics for a dedicated Archive on the connected Media Driver. */
++final class ArchiveWriteCounters {
++  private static final long SETTLE_NS = TimeUnit.MILLISECONDS.toNanos(20);
++  private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
++  private final CountersReader counters;
++  private final long archiveId;
++  private final List<Identity> identities = new ArrayList<>();
++
++  record Snapshot(long bytes, long totalWriteNanos, long maxWriteNanos) {
++  }
++  private record Identity(int id, int type, long registration) {
++  }
++
++  static ArchiveWriteCounters find(CountersReader counters) {
++    List<Long> archives = new ArrayList<>();
++    counters.forEach((id, type, key, label) -> {
++      if (type == ARCHIVE_RECORDER_TOTAL_WRITE_BYTES_TYPE_ID)
++        archives.add(key.getLong(0));
++    });
++    if (archives.size() != 1)
++      throw new IllegalStateException("Archive counters require exactly one Archive on a dedicated benchmark driver");
++    return new ArchiveWriteCounters(counters, archives.getFirst());
++  }
++
++  private ArchiveWriteCounters(CountersReader counters, long archiveId) {
++    this.counters = counters;
++    this.archiveId = archiveId;
++    for (int type : new int[]{ARCHIVE_RECORDER_TOTAL_WRITE_BYTES_TYPE_ID, ARCHIVE_RECORDER_TOTAL_WRITE_TIME_TYPE_ID,
++        ARCHIVE_RECORDER_MAX_WRITE_TIME_TYPE_ID}) {
++      int id = ArchiveCounters.find(counters, type, archiveId);
++      if (id == Aeron.NULL_VALUE)
++        throw new IllegalStateException("Missing Archive counter type " + type + " for archive " + archiveId);
++      identities.add(new Identity(id, type, counters.getCounterRegistrationId(id)));
++    }
++  }
++
++  Snapshot awaitSnapshot(long expectedBytes) {
++    return awaitSnapshot(expectedBytes, SystemNanoClock.INSTANCE,
++        new SleepingIdleStrategy(TimeUnit.MILLISECONDS.toNanos(1)));
++  }
++
++  Snapshot awaitSnapshot(long expectedBytes, NanoClock clock, IdleStrategy idle) {
++    long started = clock.nanoTime();
++    long stableSince = started;
++    Snapshot previous = null;
++    while (true) {
++      long now = clock.nanoTime();
++      if (now - started >= TIMEOUT_NS)
++        throw new IllegalStateException("Timed out waiting for Archive statistics at " + expectedBytes + " bytes");
++      Snapshot sample = read();
++      if (sample.bytes() > expectedBytes)
++        throw new IllegalStateException("Unexpected Archive writes; use a fresh dedicated benchmark server");
++      if (!sample.equals(previous)) {
++        previous = sample;
++        stableSince = now;
++      }
++      // RecordingPos can advance before the recorder publishes its statistics. These counters are not an atomic
++      // tuple: require the expected byte total and a quiet observation period, outside the benchmark timers.
++      if (sample.bytes() == expectedBytes && now - stableSince >= SETTLE_NS)
++        return sample;
++      idle.idle();
++    }
++  }
++
++  private Snapshot read() {
++    validateIdentities();
++    Snapshot sample = new Snapshot(counters.getCounterValue(identities.get(0).id()),
++        counters.getCounterValue(identities.get(1).id()), counters.getCounterValue(identities.get(2).id()));
++    validateIdentities();
++    if (sample.bytes() < 0 || sample.totalWriteNanos() < 0 || sample.maxWriteNanos() < 0)
++      throw new IllegalStateException("Archive statistics are invalid");
++    return sample;
++  }
++
++  private void validateIdentities() {
++    for (Identity counter : identities) {
++      if (counters.getCounterState(counter.id()) != CountersReader.RECORD_ALLOCATED
++          || counters.getCounterRegistrationId(counter.id()) != counter.registration()
++          || counters.getCounterTypeId(counter.id()) != counter.type() || counters.metaDataBuffer()
++              .getLong(CountersReader.metaDataOffset(counter.id()) + CountersReader.KEY_OFFSET) != archiveId)
++        throw new IllegalStateException("Archive counter closed or replaced during measurement");
++    }
++  }
++
++  String summarize(Snapshot before, Snapshot after, long elapsedNanos) {
++    if (elapsedNanos <= 0)
++      throw new IllegalArgumentException("Measured duration must be positive");
++    if (after.bytes() < before.bytes() || after.totalWriteNanos() < before.totalWriteNanos()
++        || after.maxWriteNanos() < before.maxWriteNanos())
++      throw new IllegalStateException("Archive counters decreased during measurement");
++    long writeNanos = after.totalWriteNanos() - before.totalWriteNanos();
++    return String.format(Locale.ROOT,
++        "Archive ID: %d%nArchive write bytes (measured phase): %d%nArchive write time (measured phase): %d ns%n"
++            + "Archive write time / client elapsed: %.3f%%%nArchive max write time before (lifetime): %d ns%n"
++            + "Archive max write time after (lifetime): %d ns%n",
++        archiveId, after.bytes() - before.bytes(), writeNanos, 100.0 * writeNanos / elapsedNanos,
++        before.maxWriteNanos(), after.maxWriteNanos());
++  }
++}
