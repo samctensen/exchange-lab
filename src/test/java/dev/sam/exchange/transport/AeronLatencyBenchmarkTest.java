@@ -54,6 +54,9 @@ class AeronLatencyBenchmarkTest {
       String[] arguments = maxInFlight == 1 && idleMode.equals("sleep")
           ? new String[]{Integer.toString(warmup), Integer.toString(samples)}
           : new String[]{Integer.toString(warmup), Integer.toString(samples), Integer.toString(maxInFlight), idleMode};
+      if (stageTiming)
+        arguments = new String[]{Integer.toString(warmup), Integer.toString(samples), Integer.toString(maxInFlight),
+            idleMode, "--archive-counters"};
       benchmark = startMain(tempDir, benchmarkLog, AeronLatencyBenchmark.class, arguments);
       assertTrue(benchmark.waitFor(10, TimeUnit.SECONDS), "Benchmark did not finish");
       String report = Files.readString(benchmarkLog);
@@ -74,6 +77,16 @@ class AeronLatencyBenchmarkTest {
       double p99 = metric(report, "p99");
       double max = metric(report, "max");
       assertTrue(p50 > 0 && p50 <= p99 && p99 <= max, report);
+      if (stageTiming) {
+        assertTrue(report.contains("Archive write bytes (measured phase): " + samples * 64L), report);
+        Matcher writeTime = Pattern.compile("Archive write time \\(measured phase\\): ([0-9]+) ns").matcher(report);
+        assertTrue(writeTime.find(), report);
+        assertTrue(Long.parseLong(writeTime.group(1)) > 0, report);
+        assertTrue(report.contains("Archive max write time before (lifetime):"), report);
+        assertTrue(report.contains("Archive max write time after (lifetime):"), report);
+      } else {
+        assertFalse(report.contains("Archive write bytes"), report);
+      }
 
       assertTrue(server.isAlive(), "The benchmark must leave the caller's server running");
 

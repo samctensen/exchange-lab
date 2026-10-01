@@ -170,7 +170,17 @@ Add `--stage-timing=500,2000` to the dedicated server's program arguments, along
 
 The server report gives mean, p50, p99, and maximum microseconds. It excludes inbound IPC/decode time before admission and client receipt after publication. **Recording observation is not pure disk-sync time**: Archive polling, forced writes, FIFO delay, and the engine's observation all contribute. Stage means sum to the mean server total (apart from rounding); stage percentiles do not sum to total percentiles. Client and server percentiles also cannot be subtracted to isolate transport time. Samples are written only by the agent and summarized after it stops; no per-request output is added. Compare with timing disabled to check the measurement's impact.
 
-The [server stage comparison](benchmarks/results/2026-09-28-aeron-stage-timing/report.md) contains 20 timing-on/off runs. Recording observation accounted for over 99.8% of mean measured server time at both tested windows (median share across five runs each); separating Archive polling from write/force time is the next measurement.
+The [server stage comparison](benchmarks/results/2026-09-28-aeron-stage-timing/report.md) contains 20 timing-on/off runs. Recording observation accounted for over 99.8% of mean measured server time at both tested windows (median share across five runs each). The counter measurement below investigates the write-time contribution to that interval.
+
+#### Measure Archive write time
+
+Run the benchmark with `500 2000 1 sleep --archive-counters` against a fresh, dedicated server. Add `--stage-timing=500,2000` to that server to compare its request-stage timings. Repeat with client window `8` to observe batching. The optional fifth benchmark argument reads Aeron's built-in Archive recorder counters; it does not change the server or Archive sync settings.
+
+The report subtracts the post-warmup **total bytes** and **total write time** from the final totals. Write time covers Archive's timed block-write path, including `FileChannel.force` with our sync level 2. `Archive write time / client elapsed` compares aggregate recorder write time with the measured client phase's wall time; it is not a CPU percentage or a per-request latency percentile. Writes may contain several requests. Both maximum-write-time values are **lifetime maxima**, including warmup; their difference is not the measured interval's maximum.
+
+Counter discovery uses numeric type IDs and the Archive ID. Diagnostics require exactly one Archive and no other recording traffic on the driver. The fixed cancel workload has one 64-byte recorded Aeron frame per request. The benchmark checks the expected cumulative byte count before warmup, after warmup, and after measurement, waits for the counter tuple to remain unchanged for 20 ms, and fails on unexpected bytes, missing/replaced counters, or a five-second wait timeout. These checks run outside the latency, throughput, and CPU timers. Archive publishes its counters separately; the settling check reduces boundary races but is not an atomic snapshot or a guarantee against an arbitrarily delayed publication.
+
+The [1 October Archive counter comparison](benchmarks/results/2026-10-01-aeron-archive-counters/report.md) records ten runs. Median aggregate write time was 99.20% of client elapsed time at window 1 and 99.91% at window 8. This points toward the timed write/force path; it does not separate the two calls or measure physical storage latency directly.
 
 ### Encode commands, requests, and responses with Simple Binary Encoding (SBE)
 

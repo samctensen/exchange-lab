@@ -1,0 +1,10 @@
+Server ready: /private/tmp/exchange-counters-measure-zxzgp4w9/exchange-lab-aeron
+Archive: /private/tmp/exchange-counters-measure-zxzgp4w9/archive
+Request recording: 0
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=4.005 p50=1.875 p99=21.000 max=64.000 us
+Recording observation: mean=3890.175 p50=3968.417 p99=5964.541 max=13448.209 us
+Process and encode: mean=2.648 p50=0.917 p99=11.125 max=114.500 us
+Reply offer: mean=1.682 p50=0.625 p99=10.667 max=31.125 us
+Server total: mean=3898.510 p50=3975.500 p99=5967.667 max=13449.208 us

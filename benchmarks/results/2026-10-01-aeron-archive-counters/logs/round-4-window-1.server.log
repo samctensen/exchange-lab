@@ -1,0 +1,10 @@
+Server ready: /private/tmp/exchange-counters-measure-kul2ooln/exchange-lab-aeron
+Archive: /private/tmp/exchange-counters-measure-kul2ooln/archive
+Request recording: 0
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=3.553 p50=1.375 p99=22.833 max=75.166 us
+Recording observation: mean=3804.287 p50=3952.625 p99=5055.791 max=11579.250 us
+Process and encode: mean=2.180 p50=0.542 p99=14.875 max=158.875 us
+Reply offer: mean=1.482 p50=0.500 p99=10.916 max=59.125 us
+Server total: mean=3811.502 p50=3959.083 p99=5056.917 max=11580.250 us

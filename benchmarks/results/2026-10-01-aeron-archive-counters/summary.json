@@ -1,0 +1,332 @@
+{
+  "1": {
+    "runs": 5,
+    "metrics": {
+      "p50_us": {
+        "median": 3969.5,
+        "min": 3962.042,
+        "max": 3985.541
+      },
+      "p99_us": {
+        "median": 5059.375,
+        "min": 4110.583,
+        "max": 5972.958
+      },
+      "max_us": {
+        "median": 12818.542,
+        "min": 10687.208,
+        "max": 13450.667
+      },
+      "throughput_rps": {
+        "median": 261.422,
+        "min": 254.953,
+        "max": 265.203
+      },
+      "client_thread_cpu_pct": {
+        "median": 50.609,
+        "min": 50.491,
+        "max": 51.101
+      },
+      "client_jvm_cpu_pct": {
+        "median": 51.876,
+        "min": 51.641,
+        "max": 52.35
+      },
+      "archive_write_bytes": {
+        "median": 128000,
+        "min": 128000,
+        "max": 128000
+      },
+      "archive_write_ns": {
+        "median": 7593480802,
+        "min": 7481403402,
+        "max": 7780263075
+      },
+      "archive_max_before_ns": {
+        "median": 6008750,
+        "min": 5033042,
+        "max": 11552542
+      },
+      "archive_max_after_ns": {
+        "median": 12767375,
+        "min": 10658834,
+        "max": 13447834
+      },
+      "archive_write_share_pct": {
+        "median": 99.204,
+        "min": 99.102,
+        "max": 99.255
+      },
+      "log_offer_mean_us": {
+        "median": 4.005,
+        "min": 3.553,
+        "max": 4.287
+      },
+      "log_offer_p50_us": {
+        "median": 1.875,
+        "min": 1.375,
+        "max": 2.375
+      },
+      "log_offer_p99_us": {
+        "median": 21.0,
+        "min": 17.125,
+        "max": 23.166
+      },
+      "log_offer_max_us": {
+        "median": 75.166,
+        "min": 63.25,
+        "max": 148.834
+      },
+      "recording_observation_mean_us": {
+        "median": 3804.287,
+        "min": 3748.424,
+        "max": 3898.225
+      },
+      "recording_observation_p50_us": {
+        "median": 3952.625,
+        "min": 3945.208,
+        "max": 3968.542
+      },
+      "recording_observation_p99_us": {
+        "median": 5055.791,
+        "min": 4093.417,
+        "max": 5964.541
+      },
+      "recording_observation_max_us": {
+        "median": 12797.209,
+        "min": 10663.75,
+        "max": 13448.209
+      },
+      "process_encode_mean_us": {
+        "median": 2.648,
+        "min": 2.18,
+        "max": 2.897
+      },
+      "process_encode_p50_us": {
+        "median": 0.917,
+        "min": 0.542,
+        "max": 1.292
+      },
+      "process_encode_p99_us": {
+        "median": 12.208,
+        "min": 11.125,
+        "max": 14.875
+      },
+      "process_encode_max_us": {
+        "median": 103.458,
+        "min": 76.375,
+        "max": 158.875
+      },
+      "reply_offer_mean_us": {
+        "median": 1.682,
+        "min": 1.482,
+        "max": 1.889
+      },
+      "reply_offer_p50_us": {
+        "median": 0.625,
+        "min": 0.5,
+        "max": 0.917
+      },
+      "reply_offer_p99_us": {
+        "median": 10.833,
+        "min": 9.583,
+        "max": 11.5
+      },
+      "reply_offer_max_us": {
+        "median": 40.292,
+        "min": 31.125,
+        "max": 71.417
+      },
+      "server_total_mean_us": {
+        "median": 3811.502,
+        "min": 3756.261,
+        "max": 3907.263
+      },
+      "server_total_p50_us": {
+        "median": 3959.708,
+        "min": 3952.791,
+        "max": 3976.458
+      },
+      "server_total_p99_us": {
+        "median": 5056.917,
+        "min": 4098.958,
+        "max": 5967.667
+      },
+      "server_total_max_us": {
+        "median": 12811.833,
+        "min": 10680.916,
+        "max": 13449.208
+      },
+      "amortized_write_us_per_request": {
+        "median": 3796.740401,
+        "min": 3740.701701,
+        "max": 3890.1315375
+      }
+    }
+  },
+  "8": {
+    "runs": 5,
+    "metrics": {
+      "p50_us": {
+        "median": 7981.292,
+        "min": 7928.5,
+        "max": 7989.875
+      },
+      "p99_us": {
+        "median": 9021.917,
+        "min": 8224.583,
+        "max": 9977.791
+      },
+      "max_us": {
+        "median": 13138.625,
+        "min": 9013.459,
+        "max": 15010.042
+      },
+      "throughput_rps": {
+        "median": 1015.408,
+        "min": 1008.323,
+        "max": 1050.595
+      },
+      "client_thread_cpu_pct": {
+        "median": 50.772,
+        "min": 50.31,
+        "max": 51.256
+      },
+      "client_jvm_cpu_pct": {
+        "median": 55.471,
+        "min": 54.914,
+        "max": 56.762
+      },
+      "archive_write_bytes": {
+        "median": 128000,
+        "min": 128000,
+        "max": 128000
+      },
+      "archive_write_ns": {
+        "median": 1967781827,
+        "min": 1901537994,
+        "max": 1981762385
+      },
+      "archive_max_before_ns": {
+        "median": 5432541,
+        "min": 5075750,
+        "max": 10628791
+      },
+      "archive_max_after_ns": {
+        "median": 10564209,
+        "min": 5432541,
+        "max": 10648750
+      },
+      "archive_write_share_pct": {
+        "median": 99.905,
+        "min": 99.878,
+        "max": 99.913
+      },
+      "log_offer_mean_us": {
+        "median": 1.613,
+        "min": 1.338,
+        "max": 2.34
+      },
+      "log_offer_p50_us": {
+        "median": 0.667,
+        "min": 0.625,
+        "max": 0.709
+      },
+      "log_offer_p99_us": {
+        "median": 13.583,
+        "min": 11.75,
+        "max": 23.042
+      },
+      "log_offer_max_us": {
+        "median": 56.458,
+        "min": 42.375,
+        "max": 116.708
+      },
+      "recording_observation_mean_us": {
+        "median": 7845.386,
+        "min": 7573.272,
+        "max": 7906.018
+      },
+      "recording_observation_p50_us": {
+        "median": 7971.084,
+        "min": 7907.0,
+        "max": 7979.125
+      },
+      "recording_observation_p99_us": {
+        "median": 9009.875,
+        "min": 8103.708,
+        "max": 9961.333
+      },
+      "recording_observation_max_us": {
+        "median": 13119.916,
+        "min": 9005.375,
+        "max": 15001.958
+      },
+      "process_encode_mean_us": {
+        "median": 0.772,
+        "min": 0.611,
+        "max": 1.206
+      },
+      "process_encode_p50_us": {
+        "median": 0.208,
+        "min": 0.167,
+        "max": 0.292
+      },
+      "process_encode_p99_us": {
+        "median": 8.5,
+        "min": 6.875,
+        "max": 18.125
+      },
+      "process_encode_max_us": {
+        "median": 71.042,
+        "min": 64.583,
+        "max": 181.375
+      },
+      "reply_offer_mean_us": {
+        "median": 0.561,
+        "min": 0.401,
+        "max": 0.755
+      },
+      "reply_offer_p50_us": {
+        "median": 0.208,
+        "min": 0.167,
+        "max": 0.209
+      },
+      "reply_offer_p99_us": {
+        "median": 5.5,
+        "min": 4.875,
+        "max": 7.875
+      },
+      "reply_offer_max_us": {
+        "median": 30.625,
+        "min": 28.917,
+        "max": 72.875
+      },
+      "server_total_mean_us": {
+        "median": 7847.806,
+        "min": 7577.055,
+        "max": 7908.415
+      },
+      "server_total_p50_us": {
+        "median": 7973.25,
+        "min": 7910.291,
+        "max": 7981.709
+      },
+      "server_total_p99_us": {
+        "median": 9010.791,
+        "min": 8105.334,
+        "max": 9962.75
+      },
+      "server_total_max_us": {
+        "median": 13122.709,
+        "min": 9007.5,
+        "max": 15004.125
+      },
+      "amortized_write_us_per_request": {
+        "median": 983.8909135,
+        "min": 950.768997,
+        "max": 990.8811925
+      }
+    }
+  }
+}

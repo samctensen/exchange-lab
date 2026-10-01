@@ -1,0 +1,10 @@
+Server ready: /private/tmp/exchange-counters-measure-n3qu_70p/exchange-lab-aeron
+Archive: /private/tmp/exchange-counters-measure-n3qu_70p/archive
+Request recording: 0
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=2.340 p50=0.709 p99=23.042 max=116.708 us
+Recording observation: mean=7792.107 p50=7960.459 p99=8385.125 max=9005.375 us
+Process and encode: mean=1.206 p50=0.292 p99=12.542 max=84.000 us
+Reply offer: mean=0.755 p50=0.209 p99=7.875 max=33.000 us
+Server total: mean=7796.408 p50=7964.000 p99=8386.208 max=9007.500 us

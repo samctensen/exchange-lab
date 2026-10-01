@@ -1,0 +1,20 @@
+{
+  "aeron_version": "1.53.0",
+  "source_jar_sha256": "8117fc18d74a51d1c6fd4bcbfbc83da64ecd4a63e1002233c94cc0110622adba",
+  "observations": [
+    {
+      "source": "io/aeron/archive/RecordingWriter.java",
+      "lines": "117-145",
+      "meaning": "Times buffer preparation/checksum, channel writes, and configured force; increments bytes and total/max write time. Segment rollover happens afterward."
+    },
+    {
+      "source": "io/aeron/archive/ArchiveConductor.java",
+      "lines": "2699-2740",
+      "meaning": "A recorder-wide sum and lifetime maximum; publishes bytes, total write time, then maximum as separate counters after its work cycle."
+    },
+    {
+      "source": "io/aeron/archive/ArchiveCounters.java",
+      "meaning": "Counter keys carry Archive ID; public find locates a counter by numeric type and Archive ID."
+    }
+  ]
+}

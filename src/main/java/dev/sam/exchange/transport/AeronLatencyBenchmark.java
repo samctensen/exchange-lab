@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import org.agrona.ExpandableArrayBuffer;
+import org.agrona.BitUtil;
 import org.agrona.concurrent.BusySpinIdleStrategy;
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.NanoClock;
@@ -23,6 +24,8 @@ import dev.sam.exchange.protocol.SbeRequestCodec;
 import io.aeron.Aeron;
 import io.aeron.Publication;
 import io.aeron.Subscription;
+import io.aeron.logbuffer.FrameDescriptor;
+import io.aeron.protocol.DataHeaderFlyweight;
 
 public class AeronLatencyBenchmark {
   private static final int DEFAULT_WARMUP_COUNT = 500;
@@ -36,9 +39,9 @@ public class AeronLatencyBenchmark {
   }
 
   public static void main(String[] args) {
-    if (args.length > 4) {
+    if (args.length > 5 || (args.length == 5 && !"--archive-counters".equals(args[4]))) {
       throw new IllegalArgumentException(
-          "Usage: AeronLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight] [sleep|spin]");
+          "Usage: AeronLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight] [sleep|spin] [--archive-counters]");
     }
     int warmupCount = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_WARMUP_COUNT;
     int sampleCount = args.length > 1 ? Integer.parseInt(args[1]) : DEFAULT_SAMPLE_COUNT;
@@ -53,16 +56,35 @@ public class AeronLatencyBenchmark {
     // Use a separate server with a fresh archive directory and --quiet for a comparable baseline.
     String aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
     Measurement measured;
+    String archiveReport = "";
     try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectory));
         Publication publication = aeron.addPublication("aeron:ipc", 1);
         Subscription replies = aeron.addSubscription("aeron:ipc", 2)) {
       // A timeout fails this run; automatic resends would change the workload being measured.
       AeronRequestClient client = new AeronRequestClient(publication, replies,
           new ClientConfig(Duration.ofSeconds(5), 1));
+      ArchiveWriteCounters counters = args.length == 5 ? ArchiveWriteCounters.find(aeron.countersReader()) : null;
+      // This workload uses one fixed-size, unfragmented cancel frame per fresh request.
+      int encodedLength = new SbeRequestCodec().encode(new CommandRequest(new UUID(0, 0), new CancelOrder(1)),
+          new ExpandableArrayBuffer(64), 0);
+      long recordedBytesPerRequest = BitUtil.align(encodedLength + DataHeaderFlyweight.HEADER_LENGTH,
+          FrameDescriptor.FRAME_ALIGNMENT);
+      if (counters != null) {
+        if (encodedLength > publication.maxPayloadLength())
+          throw new IllegalStateException("Archive counter diagnostics require unfragmented benchmark requests");
+        counters.awaitSnapshot(0);
+      }
 
       // Drain all warmup replies before starting the measured phase.
       measure(client, warmupCount, maxInFlight, SystemNanoClock.INSTANCE, idle);
+      ArchiveWriteCounters.Snapshot before = counters == null
+          ? null
+          : counters.awaitSnapshot(warmupCount * recordedBytesPerRequest);
       measured = measure(client, sampleCount, maxInFlight, SystemNanoClock.INSTANCE, idle);
+      if (counters != null) {
+        var after = counters.awaitSnapshot(((long) warmupCount + sampleCount) * recordedBytesPerRequest);
+        archiveReport = counters.summarize(before, after, measured.elapsedNanos());
+      }
     }
 
     // Sorting and console output happen after every measured request has completed successfully.
@@ -71,6 +93,7 @@ public class AeronLatencyBenchmark {
     System.out.println("Max in flight: " + maxInFlight);
     System.out.println("Client idle strategy: " + idleMode);
     System.out.print(summarize(measured));
+    System.out.print(archiveReport);
   }
 
   static IdleStrategy idleStrategy(String mode) {

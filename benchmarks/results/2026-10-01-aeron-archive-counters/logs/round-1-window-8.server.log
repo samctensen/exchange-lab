@@ -1,0 +1,10 @@
+Server ready: /private/tmp/exchange-counters-measure-ewslascl/exchange-lab-aeron
+Archive: /private/tmp/exchange-counters-measure-ewslascl/archive
+Request recording: 0
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=1.613 p50=0.667 p99=13.583 max=56.458 us
+Recording observation: mean=7875.166 p50=7976.583 p99=8103.708 max=14555.166 us
+Process and encode: mean=0.772 p50=0.208 p99=8.500 max=71.042 us
+Reply offer: mean=0.561 p50=0.208 p99=5.500 max=28.917 us
+Server total: mean=7878.112 p50=7979.459 p99=8105.334 max=14556.666 us

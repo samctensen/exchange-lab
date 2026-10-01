@@ -1,0 +1,185 @@
+{
+  "started_at": "2026-10-01T20:07:54.613926+00:00",
+  "base_commit": "13caea595f4ff4ba8eaeacd4360823263e7142c0",
+  "build_directory": "/private/tmp/exchange-archive-counters-dqbdgtp1",
+  "java": "openjdk version \"25.0.4.1\" 2026-08-18\nOpenJDK Runtime Environment Homebrew (build 25.0.4.1)\nOpenJDK 64-Bit Server VM Homebrew (build 25.0.4.1, mixed mode, sharing)",
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83",
+  "cpu": "Apple M4 Pro",
+  "logical_cpus": 14,
+  "physical_cpus": 14,
+  "memory_bytes": 25769803776,
+  "load_average_before": [
+    2.9580078125,
+    2.50732421875,
+    2.72509765625
+  ],
+  "existing_exchange_processes": [],
+  "jvm_args": [
+    "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
+  ],
+  "removed_environment_options": [
+    "JAVA_TOOL_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+    "_JAVA_OPTIONS"
+  ],
+  "warmup_count": 500,
+  "sample_count": 2000,
+  "rounds": 5,
+  "server_args": [
+    "<fresh-archive-directory>",
+    "--quiet",
+    "--stage-timing=500,2000"
+  ],
+  "engine_log_window": 8,
+  "client_idle_strategy": "SleepingIdleStrategy",
+  "timing_variants": [
+    "on"
+  ],
+  "archive_counters": true,
+  "counter_settle_millis": 20,
+  "counter_scope": "One dedicated Archive; deltas after warmup; maximum values are lifetime maxima",
+  "timing_sample_counts": {
+    "warmup": 500,
+    "samples": 2000
+  },
+  "cpu_measurement": "Client benchmark thread and client JVM CPU-time deltas around the measured phase; 100% is one core; server excluded.",
+  "engine_idle_strategy": "BusySpinIdleStrategy",
+  "archive_file_sync_level": 2,
+  "archive_catalog_sync_level": 2,
+  "source_hashes": {
+    "src/main/.DS_Store": "1a4099551936af8f22ee641b0f6049b0f31995abcff7b7b6eb34c53cd5b86981",
+    "src/main/java/.DS_Store": "45a89062d4da6bc6b2062aec5ce74bf462d5ed7eacb8519f010839c9a76b2883",
+    "src/main/java/dev/.DS_Store": "0d3491510b0cd0397cd412e7386aaa3014640d3ef353c959467e11fff3a97876",
+    "src/main/java/dev/sam/.DS_Store": "2f000fca78797488e3fb08c34c9ad3e65fae2605bf2668f3d32f6f15e1c6ad28",
+    "src/main/java/dev/sam/exchange/.DS_Store": "d6ef3178b3213dbe7a16ebcf91225c2d1fa9cb0525c0eead195dbddb0bfba12d",
+    "src/main/java/dev/sam/exchange/transport/ArchiveWriteCounters.java": "e6fcac2f6480b95b11c04ce6558d5c2414a507dd706a0a21a8a0cfa0e88a6407",
+    "src/main/java/dev/sam/exchange/transport/PendingLoggedRequest.java": "9250355d41da82be4d22a2622d86d47ae877401ed0eae60fcd27b78cf046492b",
+    "src/main/java/dev/sam/exchange/transport/AeronEngineClient.java": "86f0245a5acf1866cde44f27607756624825b526fc76b5fc40863e6baa08239e",
+    "src/main/java/dev/sam/exchange/transport/ClientConfig.java": "81047696cb0c59996693199a8be67aa659df0211fbfddb3ce679f87807209b6a",
+    "src/main/java/dev/sam/exchange/transport/SbeOrderDemo.java": "93d32794338eaaf73e95596841b0754aa6b9f5df282fcc5c583999fdad7d1936",
+    "src/main/java/dev/sam/exchange/transport/CommandRequest.java": "aabbf268377816bb975bb66316517b84a7d49bca30c8eda851bb903765689ec1",
+    "src/main/java/dev/sam/exchange/transport/AeronLatencyBenchmark.java": "00672754bf5b461dc28e33ebd0b98c56b3629c5f6235dad56a0f6426dcad1f86",
+    "src/main/java/dev/sam/exchange/transport/CommandResponseCodec.java": "8cbc5e6cef5a1621f6cdce9f2ca778a34f60b8053d4dafa19971b6b61bcdc819",
+    "src/main/java/dev/sam/exchange/transport/AeronRequestClient.java": "274a4edab7d32446450d592e168725cc2987b4a1cbcb5c4386fd39628d6ac8ef",
+    "src/main/java/dev/sam/exchange/transport/AeronOrderDemo.java": "2c30ffe61a08b8b92e899d99df95f1c8983dc5aca7eb744979d039a5a87d86c2",
+    "src/main/java/dev/sam/exchange/transport/CommandResponse.java": "2a49c22794a9fd6866a353a5e287315cc6551796c19b75168fb9d32a517bb2a9",
+    "src/main/java/dev/sam/exchange/transport/CommandResultCodec.java": "1f1891b7ce4e1781d109fc6905568e82020cd67c4b1cd611e0e62ec5bd223ba6",
+    "src/main/java/dev/sam/exchange/transport/EngineStageTimings.java": "71f3b8d8a7fb6a13a2b7a9f63137bc4b0a529942256ed2e2394247ca7b4af818",
+    "src/main/java/dev/sam/exchange/transport/AeronEngineAgent.java": "0af1e7c41b34e48c72e74d001ad29860e018fde6af158ed7163467ad226963ab",
+    "src/main/java/dev/sam/exchange/transport/RequestStateMachine.java": "9a0d7161bec6a3b9985e94148d7d4f1db2842344d51cfc9057c00d41e01dea93",
+    "src/main/java/dev/sam/exchange/transport/AeronEngineServer.java": "84e56320cbd1cae2d19f6eb83a0a31af5bbdc010126ab6e7e8359d26c6202c43",
+    "src/main/java/dev/sam/exchange/transport/CommandRequestCodec.java": "8beb05594f8dd8b989f86288701bc34bb00202bd6beeee12c91ae719da45db20",
+    "src/main/java/dev/sam/exchange/transport/AeronArchiveDemo.java": "27c6091e7d93722159f7d0af2b0793f66bfe3525c4a070d12c22616cc4397707",
+    "src/main/java/dev/sam/exchange/protocol/SbeRequestCodec.java": "25bf25232630a87c2cfde500e1e41b933f68badfd345399d489ad4e7534cf303",
+    "src/main/java/dev/sam/exchange/protocol/CommandCodec.java": "a7011629a614870286f665c1925bf8b92793e863239f23363a5c843bc643bc22",
+    "src/main/java/dev/sam/exchange/protocol/SbeCommandCodec.java": "9320456bf7b5c36910c1ba68cea736fc888897cd6767aaadb5fc8cc2181b8708",
+    "src/main/java/dev/sam/exchange/protocol/SbeResponseCodec.java": "6ec45f5dc2f7d9c60c53149c5ede65b7ee0e3b126b092d0999967cbc0fa32ae7",
+    "src/main/java/dev/sam/exchange/persistence/RequestLog.java": "8804c859584fe550e1beac7f09414e52fb9d2d3be644ada9eb43846178321cd3",
+    "src/main/java/dev/sam/exchange/persistence/ArchiveRuntime.java": "89da1e60b49a1533fdbbc55a62dd3e04783146dd2dc64404d230fc9a949a21ce",
+    "src/main/java/dev/sam/exchange/persistence/ArchiveRequestLog.java": "3ab5987049b452e267e3a6a914558c21e712f75cc982977a1562a41763dcdbcf",
+    "src/main/java/dev/sam/exchange/engine/ReplayRunner.java": "32aada13c4b2960c5da7f2313b9d6f420fb9a17db150167f84e932ebdba8abb5",
+    "src/main/java/dev/sam/exchange/engine/CancelResult.java": "cb0e434caa346acc82fbd659fb16574f8276d458058741a9ee7341f9ff383998",
+    "src/main/java/dev/sam/exchange/engine/RejectReason.java": "6276ff805c213b7d3e0608b7432166d67086b546e77c697fbcf81060e55a9624",
+    "src/main/java/dev/sam/exchange/engine/OrderBook.java": "39c94eaa94d28ddbc9f7641aa614e3f2ec645c7dc483130a004eb0b348942c87",
+    "src/main/java/dev/sam/exchange/engine/RejectResult.java": "b252f90e185dd91292a727a059e51980a9305dd574524f90077969a1926d1121",
+    "src/main/java/dev/sam/exchange/engine/Side.java": "13869c131cccde5bb0d22b7e87c52ab65576c6ffdb25e4aab7de1bd385d78ecd",
+    "src/main/java/dev/sam/exchange/engine/PlaceResult.java": "c82d519c5a0ee174200c663019cd115671a0533222ad9b99306f20027a79e437",
+    "src/main/java/dev/sam/exchange/engine/CancelOrder.java": "bd90ad93a35c15c57f3a6fe76c04aacdd60371e18f3a38180ec297b6d4c5349e",
+    "src/main/java/dev/sam/exchange/engine/Trade.java": "e14601e0479af2e54696d615665a24e3f5ccc13e3ead4c05092437f75ebd3d36",
+    "src/main/java/dev/sam/exchange/engine/RestingOrder.java": "24b4a49bbe03ace8198ae2d036059bbc0b8145a3db183ddff689e1a7e4e74ff4",
+    "src/main/java/dev/sam/exchange/engine/ReplayResult.java": "0572239822fb45ee5fe4392e37c332745c0367bad2bd2777209b35254145e2e7",
+    "src/main/java/dev/sam/exchange/engine/PriceLevel.java": "37a944118919299eb7a9b6f577bb7cacfbbf25cb9eb775bef42dd53850e67c02",
+    "src/main/java/dev/sam/exchange/engine/EngineCommand.java": "70b40d61bf4dc37690f9e1ce3793d91d7c4910b46c51aafdb8e87ec3bd13c2f6",
+    "src/main/java/dev/sam/exchange/engine/OrderSnapshot.java": "671c9b50f1d68f8259d08082e8162e26d6ca8f09db586bdc4e805a10a621e81e",
+    "src/main/java/dev/sam/exchange/engine/MatchingEngine.java": "c1f018e8346daeb8965b318288b9bcc5510431fe9b44e02195d8e9b6a6099d9c",
+    "src/main/java/dev/sam/exchange/engine/CommandResult.java": "d2febacb76d605424d9452dba242fc39352cca6e29b974713340439e0c8853c8",
+    "src/main/java/dev/sam/exchange/engine/PlaceOrder.java": "77e558c02e885e2bbaf837a093fe899d9c71764018df42803e373da4c3326e5d",
+    "src/main/java/dev/sam/exchange/gateway/GrpcGatewayServer.java": "4153574f98c6ca5a85bc55d851dcf375a496a5c9dcb7f7da72a65ceb043040a5",
+    "src/main/java/dev/sam/exchange/gateway/GrpcCommandMapper.java": "0f9d81b77761e6e85f3efb4bfcfc9ca6910a5bc796fdf8b06ab035c4e0c35942",
+    "src/main/java/dev/sam/exchange/gateway/InFlightRequest.java": "572de222d299370b7d7510f69d9331ffc5cf29b42890e3de4885ba417de9c5a1",
+    "src/main/java/dev/sam/exchange/gateway/PendingRequest.java": "ce8972537f5266d78e04b4d58e758cafe666defda8d66180054ca1cb626f1cef",
+    "src/main/java/dev/sam/exchange/gateway/GrpcExchangeService.java": "a86d2e51acf6d3844dc2136fea481dba81c3679760af69149852ad7c73cff462",
+    "src/main/java/dev/sam/exchange/gateway/GrpcGatewayClient.java": "469a41acee6aa0a0ce54fb4515d8f7f4b9700fb03db9eed1855feb7b4d20c87d",
+    "src/main/java/dev/sam/exchange/gateway/EngineGateway.java": "3c3e1fee278b8e4dd00d1560bd879fd760c033b3d00b2ee936d4cefdc38ee1e6",
+    "src/main/resources/sbe/orders.xml": "2f37a7ad3de6409b1ce665a747ba45ddb0accdd414073748263c58c5595beca6",
+    "src/main/proto/exchange/v1/exchange.proto": "23d4c9f675078fed8fa6af2c9d661557a94ffc1b568d3ad3c7eb262571f26fd9"
+  },
+  "application_validation": {
+    "tests": 508,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "spotless": "passed"
+  },
+  "engine_jar_sha256": "08343998aa569d786c2a36e9244b0a43386a51ed69912a75b628c74d164a672b",
+  "implementation_patch_sha256": "dc90bc72596b5e7fd75aab00758221a7b9cd1e905fccf72387f52e45fec73d3d",
+  "run_order": [
+    [
+      1,
+      8,
+      "on"
+    ],
+    [
+      1,
+      1,
+      "on"
+    ],
+    [
+      2,
+      1,
+      "on"
+    ],
+    [
+      2,
+      8,
+      "on"
+    ],
+    [
+      3,
+      1,
+      "on"
+    ],
+    [
+      3,
+      8,
+      "on"
+    ],
+    [
+      4,
+      1,
+      "on"
+    ],
+    [
+      4,
+      8,
+      "on"
+    ],
+    [
+      5,
+      8,
+      "on"
+    ],
+    [
+      5,
+      1,
+      "on"
+    ]
+  ],
+  "finished_at": "2026-10-01T20:09:00.457028+00:00",
+  "load_average_after": [
+    3.42236328125,
+    2.7705078125,
+    2.80859375
+  ],
+  "exchange_processes_after": [],
+  "completed_runs": 10,
+  "sources_still_match": true,
+  "benchmark_args": [
+    "500",
+    "2000",
+    "<window>",
+    "sleep",
+    "--archive-counters"
+  ],
+  "counter_boundary_note": "Three separate published counters, checked against expected bytes and observed unchanged for 20 ms; not an atomic tuple. Boundary waits are outside measurement timers."
+}
