@@ -1,0 +1,11 @@
+Server ready: /private/tmp/exchange-windows-measure-vm348xzv/exchange-lab-aeron
+Archive: /private/tmp/exchange-windows-measure-vm348xzv/archive
+Request recording: 0
+Engine log window: 16
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=1.201 p50=0.541 p99=11.833 max=48.625 us
+Recording observation: mean=7887.067 p50=7984.167 p99=8354.959 max=15092.875 us
+Process and encode: mean=0.428 p50=0.166 p99=4.875 max=65.833 us
+Reply offer: mean=0.303 p50=0.167 p99=3.667 max=25.042 us
+Server total: mean=7888.999 p50=7985.083 p99=8356.000 max=15093.542 us

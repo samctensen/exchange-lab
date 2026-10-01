@@ -1,0 +1,11 @@
+Server ready: /private/tmp/exchange-windows-measure-fqxcod_s/exchange-lab-aeron
+Archive: /private/tmp/exchange-windows-measure-fqxcod_s/archive
+Request recording: 0
+Engine log window: 16
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=1.767 p50=0.667 p99=17.083 max=151.458 us
+Recording observation: mean=7794.760 p50=7963.583 p99=8959.583 max=13981.292 us
+Process and encode: mean=0.668 p50=0.167 p99=6.916 max=53.834 us
+Reply offer: mean=0.451 p50=0.167 p99=5.834 max=30.708 us
+Server total: mean=7797.646 p50=7965.916 p99=8960.458 max=13985.167 us

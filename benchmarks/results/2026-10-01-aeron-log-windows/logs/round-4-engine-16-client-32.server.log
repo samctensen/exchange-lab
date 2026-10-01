@@ -1,0 +1,11 @@
+Server ready: /private/tmp/exchange-windows-measure-3syxmto_/exchange-lab-aeron
+Archive: /private/tmp/exchange-windows-measure-3syxmto_/archive
+Request recording: 0
+Engine log window: 16
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=1.320 p50=0.625 p99=13.375 max=70.458 us
+Recording observation: mean=7800.436 p50=7985.166 p99=8088.416 max=8102.333 us
+Process and encode: mean=0.596 p50=0.167 p99=7.416 max=89.000 us
+Reply offer: mean=0.388 p50=0.167 p99=4.417 max=28.250 us
+Server total: mean=7802.740 p50=7987.625 p99=8090.833 max=8105.208 us

@@ -1,0 +1,11 @@
+Server ready: /private/tmp/exchange-windows-measure-vsq01_iq/exchange-lab-aeron
+Archive: /private/tmp/exchange-windows-measure-vsq01_iq/archive
+Request recording: 0
+Engine log window: 16
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=2.067 p50=0.667 p99=22.291 max=115.250 us
+Recording observation: mean=7582.662 p50=7919.000 p99=8924.833 max=14523.208 us
+Process and encode: mean=0.976 p50=0.250 p99=10.833 max=88.334 us
+Reply offer: mean=0.672 p50=0.208 p99=7.583 max=44.959 us
+Server total: mean=7586.378 p50=7923.500 p99=8926.000 max=14531.125 us

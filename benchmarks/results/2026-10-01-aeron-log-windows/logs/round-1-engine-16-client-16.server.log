@@ -1,0 +1,11 @@
+Server ready: /private/tmp/exchange-windows-measure-8wdok7p0/exchange-lab-aeron
+Archive: /private/tmp/exchange-windows-measure-8wdok7p0/archive
+Request recording: 0
+Engine log window: 16
+Waiting for requests.
+Stage timing: 2000/2000 samples, skipped 500/500 completed logged requests
+Log offer: mean=1.540 p50=0.584 p99=16.792 max=75.083 us
+Recording observation: mean=7564.530 p50=7917.917 p99=9009.083 max=15640.584 us
+Process and encode: mean=0.603 p50=0.167 p99=8.791 max=85.500 us
+Reply offer: mean=0.451 p50=0.166 p99=5.959 max=37.334 us
+Server total: mean=7567.124 p50=7920.542 p99=9014.833 max=15645.875 us
