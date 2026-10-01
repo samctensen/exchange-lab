@@ -1,0 +1,747 @@
+diff --git a/src/main/java/dev/sam/exchange/gateway/EngineGateway.java b/src/main/java/dev/sam/exchange/gateway/EngineGateway.java
+index c7ba51a..ef11d90 100644
+--- a/src/main/java/dev/sam/exchange/gateway/EngineGateway.java
++++ b/src/main/java/dev/sam/exchange/gateway/EngineGateway.java
+@@ -31,14 +31,20 @@ public class EngineGateway implements AutoCloseable {
+   private final Map<UUID, InFlightRequest> inFlight = new LinkedHashMap<>();
+   private final int maxInFlight;
+   private final SbeRequestCodec requestCodec = new SbeRequestCodec();
++  private final GatewayDiagnostics diagnostics;
+ 
+   public EngineGateway(AeronRequestClient client, int capacity, int maxInFlight) {
++    this(client, capacity, maxInFlight, null);
++  }
++
++  EngineGateway(AeronRequestClient client, int capacity, int maxInFlight, GatewayDiagnostics diagnostics) {
+     if (maxInFlight < 1) {
+       throw new IllegalArgumentException("maxInFlight must be at least 1");
+     }
+     this.client = client;
+     this.requests = new ArrayBlockingQueue<>(capacity);
+     this.maxInFlight = maxInFlight;
++    this.diagnostics = diagnostics;
+     this.worker = new Thread(this::runWorker, "engine-gateway");
+   }
+ 
+@@ -51,7 +57,7 @@ public class EngineGateway implements AutoCloseable {
+       throw new IllegalArgumentException("request must not be null");
+     }
+     CompletableFuture<CommandResult> result = new CompletableFuture<>();
+-    PendingRequest pendingRequest = new PendingRequest(request, result);
++    PendingRequest pendingRequest = new PendingRequest(request, result, diagnostics == null ? 0 : System.nanoTime());
+     RejectedExecutionException rejection = null;
+     // Admission and shutdown share a lock: a request is either accepted before close or rejected.
+     synchronized (lifecycleLock) {
+@@ -59,6 +65,11 @@ public class EngineGateway implements AutoCloseable {
+         rejection = new RejectedExecutionException("Gateway is not running");
+       } else if (!requests.offer(pendingRequest)) {
+         rejection = new RejectedExecutionException("request queue is full");
++        if (diagnostics != null)
++          diagnostics.queueFull();
++      } else if (diagnostics != null) {
++        // The worker may dequeue between offer and size; this is an observed high-water mark.
++        diagnostics.accepted(requests.size());
+       }
+     }
+     if (rejection != null) {
+@@ -154,8 +165,11 @@ public class EngineGateway implements AutoCloseable {
+         break;
+       } else {
+         requests.poll();
++        long activatedNanos = diagnostics == null ? 0 : System.nanoTime();
+         InFlightRequest active = new InFlightRequest(pending, requestCodec, nowNanos + timeoutNanos);
+         inFlight.put(requestId, active);
++        if (diagnostics != null)
++          diagnostics.activated(activatedNanos - pending.enqueuedNanos(), inFlight.size());
+       }
+       workCounter++;
+     }
+@@ -179,6 +193,8 @@ public class EngineGateway implements AutoCloseable {
+       if (active.phase == InFlightRequest.Phase.OFFERING) {
+         long result = client.trySend(active.buffer, 0, active.messageLength);
+         if (result >= 0) {
++          if (diagnostics != null)
++            diagnostics.offered(active.attempts > 0);
+           active.attempts = active.attempts + 1;
+           active.phase = InFlightRequest.Phase.AWAITING_REPLY;
+           active.deadlineNanos = nowNanos + timeoutNanos;
+@@ -205,16 +221,22 @@ public class EngineGateway implements AutoCloseable {
+       if (nowNanos - active.deadlineNanos < 0) {
+         continue;
+       } else if (active.phase == InFlightRequest.Phase.OFFERING) {
++        if (diagnostics != null)
++          diagnostics.timedOut(false);
+         iterator.remove();
+         String message = "Offer failed for " + active.pending.request().requestId() + "; sending timed out"
+             + (active.attempts > 0 ? "; outcome unknown" : "");
+         active.pending.result().completeExceptionally(new IllegalStateException(message));
+         workCounter++;
+       } else if (active.phase == InFlightRequest.Phase.AWAITING_REPLY && active.attempts < maxAttempts) {
++        if (diagnostics != null)
++          diagnostics.timedOut(true);
+         active.phase = InFlightRequest.Phase.OFFERING;
+         active.deadlineNanos = nowNanos + timeoutNanos;
+         workCounter++;
+       } else if (active.phase == InFlightRequest.Phase.AWAITING_REPLY && active.attempts >= maxAttempts) {
++        if (diagnostics != null)
++          diagnostics.timedOut(true);
+         iterator.remove();
+         String message = "No reply after " + active.attempts + " attempts for request "
+             + active.pending.request().requestId() + (active.attempts > 0 ? "; outcome unknown" : "");
+diff --git a/src/main/java/dev/sam/exchange/gateway/GrpcGatewayServer.java b/src/main/java/dev/sam/exchange/gateway/GrpcGatewayServer.java
+index 572fc28..61d6769 100644
+--- a/src/main/java/dev/sam/exchange/gateway/GrpcGatewayServer.java
++++ b/src/main/java/dev/sam/exchange/gateway/GrpcGatewayServer.java
+@@ -2,6 +2,7 @@ package dev.sam.exchange.gateway;
+ 
+ import java.io.IOException;
+ import java.nio.file.Path;
++import java.util.HashSet;
+ import java.util.concurrent.TimeUnit;
+ 
+ import dev.sam.exchange.transport.AeronRequestClient;
+@@ -13,6 +14,8 @@ import io.grpc.ServerBuilder;
+ 
+ public class GrpcGatewayServer {
+   public static void main(String[] args) throws IOException, InterruptedException {
++    Config config = Config.parse(args);
++    GatewayDiagnostics diagnostics = config.diagnostics() ? new GatewayDiagnostics() : null;
+     // Connect to the media driver owned by the server.
+     String aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
+ 
+@@ -23,10 +26,11 @@ public class GrpcGatewayServer {
+ 
+       AeronRequestClient client = new AeronRequestClient(publication, replies);
+ 
+-      try (EngineGateway gateway = new EngineGateway(client, 128, 8)) {
++      try (EngineGateway gateway = new EngineGateway(client, config.queueCapacity(), config.maxInFlight(),
++          diagnostics)) {
+         gateway.start();
+ 
+-        Server server = ServerBuilder.forPort(50051)
++        Server server = ServerBuilder.forPort(config.port())
+             .addService(new GrpcExchangeService(gateway, new GrpcCommandMapper())).build();
+ 
+         try {
+@@ -52,6 +56,8 @@ public class GrpcGatewayServer {
+             }
+           }, "grpc-gateway-shutdown"));
+ 
++          System.out.println("Gateway max in flight: " + config.maxInFlight());
++          System.out.println("Gateway queue capacity: " + config.queueCapacity());
+           System.out.println("gRPC gateway listening on port " + server.getPort());
+ 
+           // Keep main inside the resource blocks while the server runs.
+@@ -60,7 +66,43 @@ public class GrpcGatewayServer {
+           // Also stop gRPC if main exits because of an exception.
+           server.shutdownNow();
+         }
++      } finally {
++        if (diagnostics != null)
++          System.out.print(diagnostics.summarize());
+       }
+     }
+   }
++
++  private record Config(int port, int queueCapacity, int maxInFlight, boolean diagnostics) {
++    static Config parse(String[] args) {
++      int port = 50051;
++      int queueCapacity = 128;
++      int maxInFlight = 8;
++      boolean diagnostics = false;
++      var seen = new HashSet<String>();
++      for (String arg : args) {
++        String[] parts = arg.split("=", 2);
++        if (!seen.add(parts[0]))
++          throw new IllegalArgumentException("Duplicate gateway argument: " + parts[0]);
++        if (arg.equals("--diagnostics")) {
++          diagnostics = true;
++          continue;
++        }
++        if (parts.length != 2)
++          throw new IllegalArgumentException(
++              "Expected --port=n, --queue-capacity=n, --max-in-flight=n or --diagnostics");
++        int value = Integer.parseInt(parts[1]);
++        switch (parts[0]) {
++          case "--port" -> port = value;
++          case "--queue-capacity" -> queueCapacity = value;
++          case "--max-in-flight" -> maxInFlight = value;
++          default -> throw new IllegalArgumentException("Unknown gateway argument: " + parts[0]);
++        }
++      }
++      if (port < 0 || port > 65535 || queueCapacity < 1 || maxInFlight < 1) {
++        throw new IllegalArgumentException("Port must be 0..65535; queue capacity and max in flight must be positive");
++      }
++      return new Config(port, queueCapacity, maxInFlight, diagnostics);
++    }
++  }
+ }
+diff --git a/src/main/java/dev/sam/exchange/gateway/PendingRequest.java b/src/main/java/dev/sam/exchange/gateway/PendingRequest.java
+index 667a26b..03406ff 100644
+--- a/src/main/java/dev/sam/exchange/gateway/PendingRequest.java
++++ b/src/main/java/dev/sam/exchange/gateway/PendingRequest.java
+@@ -5,5 +5,8 @@ import java.util.concurrent.CompletableFuture;
+ import dev.sam.exchange.engine.CommandResult;
+ import dev.sam.exchange.transport.CommandRequest;
+ 
+-record PendingRequest(CommandRequest request, CompletableFuture<CommandResult> result) {
++record PendingRequest(CommandRequest request, CompletableFuture<CommandResult> result, long enqueuedNanos) {
++  PendingRequest(CommandRequest request, CompletableFuture<CommandResult> result) {
++    this(request, result, 0);
++  }
+ }
+diff --git a/src/main/java/dev/sam/exchange/transport/AeronEngineAgent.java b/src/main/java/dev/sam/exchange/transport/AeronEngineAgent.java
+index 8b9a5f0..caa4d21 100644
+--- a/src/main/java/dev/sam/exchange/transport/AeronEngineAgent.java
++++ b/src/main/java/dev/sam/exchange/transport/AeronEngineAgent.java
+@@ -28,9 +28,10 @@ public class AeronEngineAgent implements Agent {
+   private final NanoClock clock;
+   private final boolean logResults;
+   private final EngineStageTimings stageTimings;
++  private final int logWindow;
+ 
+   private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
+-  private static final int MAX_PENDING_LOG_REQUESTS = 8;
++  static final int DEFAULT_LOG_WINDOW = 8;
+   private CommandRequest pendingRequest;
+   private long logDeadlineNanos;
+   private CommandResponse pendingResponse;
+@@ -62,6 +63,11 @@ public class AeronEngineAgent implements Agent {
+     this(requests, replies, processor, requestLog, logResults, SystemNanoClock.INSTANCE);
+   }
+ 
++  public AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor,
++      RequestLog requestLog, boolean logResults, int logWindow) {
++    this(requests, replies, processor, requestLog, logResults, SystemNanoClock.INSTANCE, null, logWindow);
++  }
++
+   AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor, RequestLog requestLog,
+       boolean logResults, NanoClock clock) {
+     this(requests, replies, processor, requestLog, logResults, clock, null);
+@@ -69,6 +75,12 @@ public class AeronEngineAgent implements Agent {
+ 
+   AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor, RequestLog requestLog,
+       boolean logResults, NanoClock clock, EngineStageTimings stageTimings) {
++    this(requests, replies, processor, requestLog, logResults, clock, stageTimings, DEFAULT_LOG_WINDOW);
++  }
++
++  AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor, RequestLog requestLog,
++      boolean logResults, NanoClock clock, EngineStageTimings stageTimings, int logWindow) {
++    this.logWindow = validateLogWindow(logWindow);
+     this.requests = requests;
+     this.replies = replies;
+     this.processor = processor;
+@@ -78,6 +90,13 @@ public class AeronEngineAgent implements Agent {
+     this.stageTimings = stageTimings;
+   }
+ 
++  static int validateLogWindow(int logWindow) {
++    if (logWindow <= 0) {
++      throw new IllegalArgumentException("Log window must be positive: " + logWindow);
++    }
++    return logWindow;
++  }
++
+   @Override
+   public int doWork() {
+     if (pendingResponse != null) {
+@@ -170,7 +189,7 @@ public class AeronEngineAgent implements Agent {
+   }
+ 
+   private int offerPendingRequest() {
+-    if (pendingRequest == null || pendingLoggedRequests.size() >= MAX_PENDING_LOG_REQUESTS) {
++    if (pendingRequest == null || pendingLoggedRequests.size() >= logWindow) {
+       return 0;
+     }
+     UUID requestId = pendingRequest.requestId();
+@@ -206,7 +225,7 @@ public class AeronEngineAgent implements Agent {
+       return 0;
+     }
+     int work = 0;
+-    while (pendingLoggedRequests.size() < MAX_PENDING_LOG_REQUESTS) {
++    while (pendingLoggedRequests.size() < logWindow) {
+       if (pendingRequest == null) {
+         int result = requests.poll(assembler, 1);
+         work = work + result;
+diff --git a/src/main/java/dev/sam/exchange/transport/AeronEngineServer.java b/src/main/java/dev/sam/exchange/transport/AeronEngineServer.java
+index b029e8d..8eccbcd 100644
+--- a/src/main/java/dev/sam/exchange/transport/AeronEngineServer.java
++++ b/src/main/java/dev/sam/exchange/transport/AeronEngineServer.java
+@@ -24,9 +24,13 @@ public class AeronEngineServer {
+     String archiveArgument = null;
+     boolean quiet = false;
+     EngineStageTimings stageTimings = null;
++    Integer configuredLogWindow = null;
+     for (String arg : args) {
+       if ("--quiet".equals(arg)) {
+         quiet = true;
++      } else if (arg.startsWith("--log-window=") && configuredLogWindow == null) {
++        configuredLogWindow = AeronEngineAgent
++            .validateLogWindow(Integer.parseInt(arg.substring("--log-window=".length())));
+       } else if (arg.startsWith("--stage-timing=") && stageTimings == null) {
+         String[] counts = arg.substring("--stage-timing=".length()).split(",", -1);
+         if (counts.length != 2) {
+@@ -37,10 +41,12 @@ public class AeronEngineServer {
+         archiveArgument = arg;
+       } else {
+         throw new IllegalArgumentException(
+-            "Usage: AeronEngineServer [archiveDirectory] [--quiet] [--stage-timing=warmupCount,sampleCount]");
++            "Usage: AeronEngineServer [archiveDirectory] [--quiet] [--stage-timing=warmupCount,sampleCount] [--log-window=count]");
+       }
+     }
+ 
++    int logWindow = configuredLogWindow == null ? AeronEngineAgent.DEFAULT_LOG_WINDOW : configuredLogWindow;
++
+     AtomicBoolean shutdownRequested = new AtomicBoolean(false);
+     AtomicReference<Throwable> agentFailure = new AtomicReference<>();
+     ErrorHandler errorHandler = error -> {
+@@ -77,14 +83,16 @@ public class AeronEngineServer {
+         Subscription subscription = aeron.addSubscription("aeron:ipc", 1);
+         Publication replies = aeron.addPublication("aeron:ipc", 2);
+         // Busy spinning keeps polling for requests; budget a dedicated core for this runner.
+-        AgentRunner runner = new AgentRunner(new BusySpinIdleStrategy(), errorHandler, null, new AeronEngineAgent(
+-            subscription, replies, stateMachine, requestLog, !quiet, SystemNanoClock.INSTANCE, stageTimings))) {
++        AgentRunner runner = new AgentRunner(new BusySpinIdleStrategy(), errorHandler, null,
++            new AeronEngineAgent(subscription, replies, stateMachine, requestLog, !quiet, SystemNanoClock.INSTANCE,
++                stageTimings, logWindow))) {
+ 
+       AgentRunner.startOnThread(runner);
+ 
+       System.out.println("Server ready: " + aeronDirectory);
+       System.out.println("Archive: " + archiveDirectory);
+       System.out.println("Request recording: " + requestLog.recordingId());
++      System.out.println("Engine log window: " + logWindow);
+       System.out.println("Waiting for requests.");
+ 
+       // The runner processes requests. Main waits here to keep resources open.
+diff --git a/src/main/java/dev/sam/exchange/transport/AeronLatencyBenchmark.java b/src/main/java/dev/sam/exchange/transport/AeronLatencyBenchmark.java
+index dad9aa3..9cd4114 100644
+--- a/src/main/java/dev/sam/exchange/transport/AeronLatencyBenchmark.java
++++ b/src/main/java/dev/sam/exchange/transport/AeronLatencyBenchmark.java
+@@ -11,6 +11,7 @@ import java.util.Map;
+ import java.util.UUID;
+ 
+ import org.agrona.ExpandableArrayBuffer;
++import org.agrona.BitUtil;
+ import org.agrona.concurrent.BusySpinIdleStrategy;
+ import org.agrona.concurrent.IdleStrategy;
+ import org.agrona.concurrent.NanoClock;
+@@ -23,6 +24,8 @@ import dev.sam.exchange.protocol.SbeRequestCodec;
+ import io.aeron.Aeron;
+ import io.aeron.Publication;
+ import io.aeron.Subscription;
++import io.aeron.logbuffer.FrameDescriptor;
++import io.aeron.protocol.DataHeaderFlyweight;
+ 
+ public class AeronLatencyBenchmark {
+   private static final int DEFAULT_WARMUP_COUNT = 500;
+@@ -36,9 +39,9 @@ public class AeronLatencyBenchmark {
+   }
+ 
+   public static void main(String[] args) {
+-    if (args.length > 4) {
++    if (args.length > 5 || (args.length == 5 && !"--archive-counters".equals(args[4]))) {
+       throw new IllegalArgumentException(
+-          "Usage: AeronLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight] [sleep|spin]");
++          "Usage: AeronLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight] [sleep|spin] [--archive-counters]");
+     }
+     int warmupCount = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_WARMUP_COUNT;
+     int sampleCount = args.length > 1 ? Integer.parseInt(args[1]) : DEFAULT_SAMPLE_COUNT;
+@@ -53,16 +56,35 @@ public class AeronLatencyBenchmark {
+     // Use a separate server with a fresh archive directory and --quiet for a comparable baseline.
+     String aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
+     Measurement measured;
++    String archiveReport = "";
+     try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectory));
+         Publication publication = aeron.addPublication("aeron:ipc", 1);
+         Subscription replies = aeron.addSubscription("aeron:ipc", 2)) {
+       // A timeout fails this run; automatic resends would change the workload being measured.
+       AeronRequestClient client = new AeronRequestClient(publication, replies,
+           new ClientConfig(Duration.ofSeconds(5), 1));
++      ArchiveWriteCounters counters = args.length == 5 ? ArchiveWriteCounters.find(aeron.countersReader()) : null;
++      // This workload uses one fixed-size, unfragmented cancel frame per fresh request.
++      int encodedLength = new SbeRequestCodec().encode(new CommandRequest(new UUID(0, 0), new CancelOrder(1)),
++          new ExpandableArrayBuffer(64), 0);
++      long recordedBytesPerRequest = BitUtil.align(encodedLength + DataHeaderFlyweight.HEADER_LENGTH,
++          FrameDescriptor.FRAME_ALIGNMENT);
++      if (counters != null) {
++        if (encodedLength > publication.maxPayloadLength())
++          throw new IllegalStateException("Archive counter diagnostics require unfragmented benchmark requests");
++        counters.awaitSnapshot(0);
++      }
+ 
+       // Drain all warmup replies before starting the measured phase.
+       measure(client, warmupCount, maxInFlight, SystemNanoClock.INSTANCE, idle);
++      ArchiveWriteCounters.Snapshot before = counters == null
++          ? null
++          : counters.awaitSnapshot(warmupCount * recordedBytesPerRequest);
+       measured = measure(client, sampleCount, maxInFlight, SystemNanoClock.INSTANCE, idle);
++      if (counters != null) {
++        var after = counters.awaitSnapshot(((long) warmupCount + sampleCount) * recordedBytesPerRequest);
++        archiveReport = counters.summarize(before, after, measured.elapsedNanos());
++      }
+     }
+ 
+     // Sorting and console output happen after every measured request has completed successfully.
+@@ -71,6 +93,7 @@ public class AeronLatencyBenchmark {
+     System.out.println("Max in flight: " + maxInFlight);
+     System.out.println("Client idle strategy: " + idleMode);
+     System.out.print(summarize(measured));
++    System.out.print(archiveReport);
+   }
+ 
+   static IdleStrategy idleStrategy(String mode) {
+diff --git a/src/main/java/dev/sam/exchange/gateway/GatewayDiagnostics.java b/src/main/java/dev/sam/exchange/gateway/GatewayDiagnostics.java
+new file mode 100644
+index 0000000..b585af6
+--- /dev/null
++++ b/src/main/java/dev/sam/exchange/gateway/GatewayDiagnostics.java
+@@ -0,0 +1,60 @@
++package dev.sam.exchange.gateway;
++
++import java.util.Locale;
++
++/** Opt-in aggregate diagnostics. Snapshots are thread-safe; final reports include warmup and shutdown drain. */
++final class GatewayDiagnostics {
++  private long accepted;
++  private long queueFull;
++  private long activated;
++  private long queueWaitNanos;
++  private long maxQueueWaitNanos;
++  private int queueHighWater;
++  private int activeHighWater;
++  private long offers;
++  private long retries;
++  private long offerTimeouts;
++  private long replyTimeouts;
++
++  synchronized void accepted(int observedQueueSize) {
++    accepted++;
++    queueHighWater = Math.max(queueHighWater, observedQueueSize);
++  }
++
++  synchronized void queueFull() {
++    queueFull++;
++  }
++
++  synchronized void activated(long waitNanos, int activeCount) {
++    activated++;
++    queueWaitNanos += waitNanos;
++    maxQueueWaitNanos = Math.max(maxQueueWaitNanos, waitNanos);
++    activeHighWater = Math.max(activeHighWater, activeCount);
++  }
++
++  synchronized void offered(boolean retry) {
++    offers++;
++    if (retry)
++      retries++;
++  }
++
++  synchronized void timedOut(boolean awaitingReply) {
++    if (awaitingReply)
++      replyTimeouts++;
++    else
++      offerTimeouts++;
++  }
++
++  synchronized String summarize() {
++    return String.format(Locale.ROOT,
++        "Gateway diagnostics: lifetime (includes warmup and shutdown drain)%n"
++            + "Gateway accepted: %d%nGateway queue full: %d%nGateway activated: %d%n"
++            + "Gateway queue high-water (observed): %d%nGateway active high-water: %d%n"
++            + "Gateway queue wait mean: %.3f us%nGateway queue wait max: %.3f us%n"
++            + "Gateway successful offers: %d%nGateway retries: %d%n"
++            + "Gateway offer timeouts: %d%nGateway reply timeouts: %d%n",
++        accepted, queueFull, activated, queueHighWater, activeHighWater,
++        activated == 0 ? 0 : queueWaitNanos / (activated * 1000.0), maxQueueWaitNanos / 1000.0, offers, retries,
++        offerTimeouts, replyTimeouts);
++  }
++}
+diff --git a/src/main/java/dev/sam/exchange/gateway/GrpcLatencyBenchmark.java b/src/main/java/dev/sam/exchange/gateway/GrpcLatencyBenchmark.java
+new file mode 100644
+index 0000000..6298b8e
+--- /dev/null
++++ b/src/main/java/dev/sam/exchange/gateway/GrpcLatencyBenchmark.java
+@@ -0,0 +1,157 @@
++package dev.sam.exchange.gateway;
++
++import java.util.Arrays;
++import java.util.EnumMap;
++import java.util.Locale;
++import java.util.Map;
++import java.util.UUID;
++import java.util.concurrent.ArrayBlockingQueue;
++import java.util.concurrent.ExecutionException;
++import java.util.concurrent.TimeUnit;
++
++import dev.sam.exchange.gateway.proto.CancelOrder;
++import dev.sam.exchange.gateway.proto.ExchangeServiceGrpc;
++import dev.sam.exchange.gateway.proto.SubmitRequest;
++import dev.sam.exchange.gateway.proto.SubmitResponse;
++import io.grpc.ManagedChannel;
++import io.grpc.ManagedChannelBuilder;
++import io.grpc.Status;
++
++/** Closed-loop diagnostic: one application RPC per fresh UUID, with bounded outstanding calls. */
++public class GrpcLatencyBenchmark {
++  record Measurement(long[] terminalLatencies, long[] successfulLatencies, Map<Status.Code, Integer> failures,
++      long elapsedNanos, int peakOutstanding) {
++  }
++
++  private record Completion(String requestId, SubmitResponse response, Status.Code failure, long elapsedNanos) {
++  }
++
++  public static void main(String[] args) throws InterruptedException {
++    if (args.length > 5) {
++      throw new IllegalArgumentException(
++          "Usage: GrpcLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight] [deadlineMillis] [port]");
++    }
++    int warmup = args.length > 0 ? Integer.parseInt(args[0]) : 500;
++    int samples = args.length > 1 ? Integer.parseInt(args[1]) : 2000;
++    int window = args.length > 2 ? Integer.parseInt(args[2]) : 8;
++    int deadline = args.length > 3 ? Integer.parseInt(args[3]) : 5000;
++    int port = args.length > 4 ? Integer.parseInt(args[4]) : 50051;
++    if (warmup < 0 || warmup > 1_000_000 || samples < 1 || samples > 1_000_000 || window < 1 || deadline < 1 || port < 1
++        || port > 65535) {
++      throw new IllegalArgumentException("Counts must be at most 1000000; samples, window, deadline and port must be "
++          + "positive; warmup may be zero; port must be at most 65535");
++    }
++    ManagedChannel channel = ManagedChannelBuilder.forAddress("localhost", port).usePlaintext().disableRetry().build();
++    Measurement measured;
++    try {
++      var stub = ExchangeServiceGrpc.newFutureStub(channel);
++      Measurement warmed = measure(stub, warmup, window, deadline);
++      if (!warmed.failures().isEmpty()) {
++        throw new IllegalStateException("Warmup RPCs failed: " + warmed.failures());
++      }
++      measured = measure(stub, samples, window, deadline);
++    } finally {
++      channel.shutdownNow();
++      if (!channel.awaitTermination(5, TimeUnit.SECONDS)) {
++        throw new IllegalStateException("Benchmark channel did not stop");
++      }
++    }
++    System.out.println("Warmup: " + warmup + " requests");
++    System.out.println("Max in flight: " + window);
++    System.out.println("RPC deadline: " + deadline + " ms");
++    System.out.println("Application RPCs per request: 1; channel retries disabled");
++    System.out.print(summarize(measured));
++  }
++
++  static Measurement measure(ExchangeServiceGrpc.ExchangeServiceFutureStub stub, int count, int maxInFlight,
++      long deadlineMillis) throws InterruptedException {
++    if (count < 0 || count > 1_000_000 || maxInFlight < 1 || deadlineMillis < 1) {
++      throw new IllegalArgumentException("Invalid benchmark counts, window or deadline");
++    }
++    long[] terminal = new long[count];
++    long[] successful = new long[count];
++    Map<Status.Code, Integer> failures = new EnumMap<>(Status.Code.class);
++    // At most one completion exists per outstanding call, including calls cancelled on shutdown.
++    var completions = new ArrayBlockingQueue<Completion>(Math.max(1, Math.min(count, maxInFlight)));
++    int submitted = 0;
++    int completed = 0;
++    int successes = 0;
++    int peakOutstanding = 0;
++    long phaseStart = System.nanoTime();
++    while (completed < count) {
++      while (submitted < count && submitted - completed < maxInFlight) {
++        String id = UUID.randomUUID().toString();
++        SubmitRequest request = SubmitRequest.newBuilder().setRequestId(id)
++            .setCancel(CancelOrder.newBuilder().setOrderId(1)).build();
++        long started = System.nanoTime();
++        var future = stub.withDeadlineAfter(deadlineMillis, TimeUnit.MILLISECONDS).submit(request);
++        future.addListener(() -> {
++          long elapsed = System.nanoTime() - started;
++          SubmitResponse response = null;
++          Status.Code failure = null;
++          try {
++            response = future.get();
++          } catch (ExecutionException e) {
++            failure = Status.fromThrowable(e.getCause()).getCode();
++          } catch (InterruptedException e) {
++            Thread.currentThread().interrupt();
++            failure = Status.Code.CANCELLED;
++          } catch (java.util.concurrent.CancellationException e) {
++            failure = Status.Code.CANCELLED;
++          }
++          completions.add(new Completion(id, response, failure, elapsed));
++        }, Runnable::run);
++        submitted++;
++        peakOutstanding = Math.max(peakOutstanding, submitted - completed);
++      }
++      // Consume whichever RPC finished first, so a slow earlier RPC cannot hold up refilling other slots.
++      Completion completion = completions.take();
++      terminal[completed++] = completion.elapsedNanos();
++      if (completion.failure() != null) {
++        failures.merge(completion.failure(), 1, Integer::sum);
++      } else {
++        SubmitResponse response = completion.response();
++        if (!response.getRequestId().equals(completion.requestId()) || !response.hasCancel()
++            || response.getCancel().getOrderId() != 1 || response.getCancel().getCancelled()) {
++          throw new IllegalStateException("Unexpected benchmark result; use a fresh, empty Archive: " + response);
++        }
++        successful[successes++] = completion.elapsedNanos();
++      }
++    }
++    return new Measurement(terminal, Arrays.copyOf(successful, successes), Map.copyOf(failures),
++        System.nanoTime() - phaseStart, peakOutstanding);
++  }
++
++  static String summarize(Measurement measured) {
++    if (measured.elapsedNanos() <= 0 || measured.terminalLatencies().length == 0) {
++      throw new IllegalArgumentException("At least one completion and positive elapsed time are required");
++    }
++    int errors = measured.failures().values().stream().mapToInt(Integer::intValue).sum();
++    StringBuilder report = new StringBuilder(String.format(Locale.ROOT,
++        "Completed: %d requests%nSuccessful: %d requests%nRPC failures: %d%nPeak outstanding: %d%n"
++            + "Completion throughput: %.3f requests/s%nSuccessful throughput: %.3f requests/s%n",
++        measured.terminalLatencies().length, measured.successfulLatencies().length, errors, measured.peakOutstanding(),
++        measured.terminalLatencies().length * 1e9 / measured.elapsedNanos(),
++        measured.successfulLatencies().length * 1e9 / measured.elapsedNanos()));
++    for (Status.Code code : Status.Code.values()) {
++      if (code != Status.Code.OK) {
++        report.append("Status ").append(code).append(": ").append(measured.failures().getOrDefault(code, 0))
++            .append(System.lineSeparator());
++      }
++    }
++    report.append(latencies("Terminal", measured.terminalLatencies()));
++    report.append(latencies("Success", measured.successfulLatencies()));
++    return report.toString();
++  }
++
++  private static String latencies(String label, long[] samples) {
++    if (samples.length == 0)
++      return label + " latency: unavailable" + System.lineSeparator();
++    long[] sorted = samples.clone();
++    Arrays.sort(sorted);
++    int p50 = (int) ((sorted.length * 50L + 99) / 100) - 1;
++    int p99 = (int) ((sorted.length * 99L + 99) / 100) - 1;
++    return String.format(Locale.ROOT, "%s p50: %.3f us%n%s p99: %.3f us%n%s max: %.3f us%n", label,
++        sorted[p50] / 1000.0, label, sorted[p99] / 1000.0, label, sorted[sorted.length - 1] / 1000.0);
++  }
++}
+diff --git a/src/main/java/dev/sam/exchange/transport/ArchiveWriteCounters.java b/src/main/java/dev/sam/exchange/transport/ArchiveWriteCounters.java
+new file mode 100644
+index 0000000..b1ec2f2
+--- /dev/null
++++ b/src/main/java/dev/sam/exchange/transport/ArchiveWriteCounters.java
+@@ -0,0 +1,119 @@
++package dev.sam.exchange.transport;
++
++import static io.aeron.AeronCounters.ARCHIVE_RECORDER_MAX_WRITE_TIME_TYPE_ID;
++import static io.aeron.AeronCounters.ARCHIVE_RECORDER_TOTAL_WRITE_BYTES_TYPE_ID;
++import static io.aeron.AeronCounters.ARCHIVE_RECORDER_TOTAL_WRITE_TIME_TYPE_ID;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Locale;
++import java.util.concurrent.TimeUnit;
++
++import org.agrona.concurrent.IdleStrategy;
++import org.agrona.concurrent.NanoClock;
++import org.agrona.concurrent.SleepingIdleStrategy;
++import org.agrona.concurrent.SystemNanoClock;
++import org.agrona.concurrent.status.CountersReader;
++
++import io.aeron.Aeron;
++import io.aeron.archive.ArchiveCounters;
++
++/** Read-only benchmark diagnostics for a dedicated Archive on the connected Media Driver. */
++final class ArchiveWriteCounters {
++  private static final long SETTLE_NS = TimeUnit.MILLISECONDS.toNanos(20);
++  private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
++  private final CountersReader counters;
++  private final long archiveId;
++  private final List<Identity> identities = new ArrayList<>();
++
++  record Snapshot(long bytes, long totalWriteNanos, long maxWriteNanos) {
++  }
++  private record Identity(int id, int type, long registration) {
++  }
++
++  static ArchiveWriteCounters find(CountersReader counters) {
++    List<Long> archives = new ArrayList<>();
++    counters.forEach((id, type, key, label) -> {
++      if (type == ARCHIVE_RECORDER_TOTAL_WRITE_BYTES_TYPE_ID)
++        archives.add(key.getLong(0));
++    });
++    if (archives.size() != 1)
++      throw new IllegalStateException("Archive counters require exactly one Archive on a dedicated benchmark driver");
++    return new ArchiveWriteCounters(counters, archives.getFirst());
++  }
++
++  private ArchiveWriteCounters(CountersReader counters, long archiveId) {
++    this.counters = counters;
++    this.archiveId = archiveId;
++    for (int type : new int[]{ARCHIVE_RECORDER_TOTAL_WRITE_BYTES_TYPE_ID, ARCHIVE_RECORDER_TOTAL_WRITE_TIME_TYPE_ID,
++        ARCHIVE_RECORDER_MAX_WRITE_TIME_TYPE_ID}) {
++      int id = ArchiveCounters.find(counters, type, archiveId);
++      if (id == Aeron.NULL_VALUE)
++        throw new IllegalStateException("Missing Archive counter type " + type + " for archive " + archiveId);
++      identities.add(new Identity(id, type, counters.getCounterRegistrationId(id)));
++    }
++  }
++
++  Snapshot awaitSnapshot(long expectedBytes) {
++    return awaitSnapshot(expectedBytes, SystemNanoClock.INSTANCE,
++        new SleepingIdleStrategy(TimeUnit.MILLISECONDS.toNanos(1)));
++  }
++
++  Snapshot awaitSnapshot(long expectedBytes, NanoClock clock, IdleStrategy idle) {
++    long started = clock.nanoTime();
++    long stableSince = started;
++    Snapshot previous = null;
++    while (true) {
++      long now = clock.nanoTime();
++      if (now - started >= TIMEOUT_NS)
++        throw new IllegalStateException("Timed out waiting for Archive statistics at " + expectedBytes + " bytes");
++      Snapshot sample = read();
++      if (sample.bytes() > expectedBytes)
++        throw new IllegalStateException("Unexpected Archive writes; use a fresh dedicated benchmark server");
++      if (!sample.equals(previous)) {
++        previous = sample;
++        stableSince = now;
++      }
++      // RecordingPos can advance before the recorder publishes its statistics. These counters are not an atomic
++      // tuple: require the expected byte total and a quiet observation period, outside the benchmark timers.
++      if (sample.bytes() == expectedBytes && now - stableSince >= SETTLE_NS)
++        return sample;
++      idle.idle();
++    }
++  }
++
++  private Snapshot read() {
++    validateIdentities();
++    Snapshot sample = new Snapshot(counters.getCounterValue(identities.get(0).id()),
++        counters.getCounterValue(identities.get(1).id()), counters.getCounterValue(identities.get(2).id()));
++    validateIdentities();
++    if (sample.bytes() < 0 || sample.totalWriteNanos() < 0 || sample.maxWriteNanos() < 0)
++      throw new IllegalStateException("Archive statistics are invalid");
++    return sample;
++  }
++
++  private void validateIdentities() {
++    for (Identity counter : identities) {
++      if (counters.getCounterState(counter.id()) != CountersReader.RECORD_ALLOCATED
++          || counters.getCounterRegistrationId(counter.id()) != counter.registration()
++          || counters.getCounterTypeId(counter.id()) != counter.type() || counters.metaDataBuffer()
++              .getLong(CountersReader.metaDataOffset(counter.id()) + CountersReader.KEY_OFFSET) != archiveId)
++        throw new IllegalStateException("Archive counter closed or replaced during measurement");
++    }
++  }
++
++  String summarize(Snapshot before, Snapshot after, long elapsedNanos) {
++    if (elapsedNanos <= 0)
++      throw new IllegalArgumentException("Measured duration must be positive");
++    if (after.bytes() < before.bytes() || after.totalWriteNanos() < before.totalWriteNanos()
++        || after.maxWriteNanos() < before.maxWriteNanos())
++      throw new IllegalStateException("Archive counters decreased during measurement");
++    long writeNanos = after.totalWriteNanos() - before.totalWriteNanos();
++    return String.format(Locale.ROOT,
++        "Archive ID: %d%nArchive write bytes (measured phase): %d%nArchive write time (measured phase): %d ns%n"
++            + "Archive write time / client elapsed: %.3f%%%nArchive max write time before (lifetime): %d ns%n"
++            + "Archive max write time after (lifetime): %d ns%n",
++        archiveId, after.bytes() - before.bytes(), writeNanos, 100.0 * writeNanos / elapsedNanos,
++        before.maxWriteNanos(), after.maxWriteNanos());
++  }
++}

@@ -160,7 +160,7 @@ The [28 September pipeline comparison](benchmarks/results/2026-09-28-aeron-pipel
 
 The [sleeping versus busy-spin comparison](benchmarks/results/2026-09-28-aeron-idle-strategies/report.md) repeats all four windows with both client strategies and measures CPU use. On this Mac and workload, spinning roughly doubled client CPU without a consistent throughput benefit.
 
-The [1 October engine log-window comparison](benchmarks/results/2026-10-01-aeron-log-windows/report.md) compares engine/client windows 8, 16, and 32 across 25 runs. Matching both at 32 delivered roughly four times the throughput of 8/8 with similar median and p99 latency in this cancellation workload. Holding the client at 32 confirms the engine bound matters; raising only client concurrency mostly adds waiting. The default remains eight pending a gateway-level comparison.
+The [1 October engine log-window comparison](benchmarks/results/2026-10-01-aeron-log-windows/report.md) compares engine/client windows 8, 16, and 32 across 25 runs. Matching both at 32 delivered roughly four times the throughput of 8/8 with similar median and p99 latency in this cancellation workload. Holding the client at 32 confirms the engine bound matters; raising only client concurrency mostly adds waiting. The default remains eight; the full gRPC comparison below tests the gateway path.
 
 #### Locate time spent inside the server
 
@@ -187,6 +187,27 @@ The report subtracts the post-warmup **total bytes** and **total write time** fr
 Counter discovery uses numeric type IDs and the Archive ID. Diagnostics require exactly one Archive and no other recording traffic on the driver. The fixed cancel workload has one 64-byte recorded Aeron frame per request. The benchmark checks the expected cumulative byte count before warmup, after warmup, and after measurement, waits for the counter tuple to remain unchanged for 20 ms, and fails on unexpected bytes, missing/replaced counters, or a five-second wait timeout. These checks run outside the latency, throughput, and CPU timers. Archive publishes its counters separately; the settling check reduces boundary races but is not an atomic snapshot or a guarantee against an arbitrarily delayed publication.
 
 The [1 October Archive counter comparison](benchmarks/results/2026-10-01-aeron-archive-counters/report.md) records ten runs. Median aggregate write time was 99.20% of client elapsed time at window 1 and 99.91% at window 8. This points toward the timed write/force path; it does not separate the two calls or measure physical storage latency directly.
+
+### Measure the full gRPC path
+
+`GrpcLatencyBenchmark` exercises localhost TCP → protobuf mapping → the bounded gateway → SBE/Aeron → Archive → engine → correlated gRPC response. Use three processes with matching client/server versions and the usual `--add-opens` JVM option:
+
+1. Start `AeronEngineServer` with a fresh Archive: `data/grpc-run-1 --quiet --log-window=8 --stage-timing=500,2000`.
+2. Start `GrpcGatewayServer` with `--max-in-flight=8 --queue-capacity=128 --port=50051 --diagnostics`.
+3. Run `GrpcLatencyBenchmark` with `500 2000 8 5000 50051` (warmup, samples, outstanding RPCs, per-RPC deadline in milliseconds, port).
+4. Stop the gateway with **⌃C** to print its diagnostics after accepted work drains; then stop the engine to print its stages.
+
+Gateway defaults remain eight active requests, 128 queued requests, port 50051, and diagnostics disabled. `--port=0` requests an ephemeral port, which startup prints. Duplicate/invalid flags fail before connecting. Engine, gateway, and benchmark concurrency are separate settings. Compare matched 8/16/32 settings, then hold client concurrency at 32 to observe queueing with smaller gateway/engine limits.
+
+The benchmark uses fresh UUIDs and missing-order cancellations. An asynchronous completion queue refills slots in completion order. Warmup drains fully before measurement; any warmup RPC failure or unexpected payload aborts the run. The client issues one application RPC per UUID with channel retries disabled. The gateway retains its existing five-second, three-attempt Aeron retry policy; diagnostics report successful resends. Request construction is outside each latency timer, while protobuf encoding, the gRPC call, and completion callback delivery are inside. Phase throughput also includes construction and completion handling; channel setup, warmup, report sorting, and shutdown are outside it. Zero warmup leaves connection/JIT startup in the measured phase.
+
+Measured RPC errors are counted rather than aborting the run. Reports show completed calls, successful replies, every non-OK gRPC status count, peak outstanding calls, completion throughput, and **successful throughput**. Terminal latency includes successful and failed calls; success latency includes valid replies only. Both use nearest-rank p50/p99/max. Always read success latency together with failure counts: fast rejection or timeout can make aggregate completion latency look attractive while useful work falls. Counts are bounded at 1,000,000; warmup may be zero, and all other numeric arguments must be positive (port at most 65535).
+
+Opt-in gateway diagnostics report accepted requests, queue-full rejections, activation count, observed queue high-water mark, active high-water mark, aggregate mean/max queue wait, successful Aeron offers, retries, and offer/reply deadline expirations. **These are lifetime values including warmup and shutdown drain**, not measured-phase deltas. Queue wait runs from submission before the admission lock to removal for activation, excluding SBE encoding. The worker can dequeue between an offer and the size sample, so queue high-water can undercount a transient peak. Counters are synchronized and introduce diagnostic overhead; keep the flag consistent across comparisons.
+
+A full queue currently maps to `UNAVAILABLE`, as do other gateway failures; correlate status counts with the internal queue-full counter. `DEADLINE_EXCEEDED` ends the client's wait and does not prove the command failed or was removed from the gateway. Accepted work can still reach Archive and execute after RPC cancellation. Gateway timeouts count its own per-attempt deadlines and are independent of the RPC deadline. This benchmark makes that distinction visible without changing command or cancellation semantics.
+
+The [1 October gRPC comparison](benchmarks/results/2026-10-01-grpc-windows/report.md) records 37 normal, queue-pressure, and deadline runs. Matching client/gateway/engine windows at 32 delivered about 4,018 successful requests/s with 8.87 ms p99. All normal comparison calls succeeded. The short-deadline probes returned zero successful RPC replies while 905 accepted commands completed in the engine, motivating explicit overload outcomes and cancellation-aware admission.
 
 ### Encode commands, requests, and responses with Simple Binary Encoding (SBE)
 

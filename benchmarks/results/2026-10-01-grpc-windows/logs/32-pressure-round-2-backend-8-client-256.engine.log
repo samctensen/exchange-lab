@@ -1,0 +1,11 @@
+Server ready: /private/tmp/exchange-grpc-measure-klnys9ep/exchange-lab-aeron
+Archive: /private/tmp/exchange-grpc-measure-klnys9ep/archive
+Request recording: 0
+Engine log window: 8
+Waiting for requests.
+Stage timing: 296/2000 samples, skipped 0/0 completed logged requests
+Log offer: mean=16.520 p50=5.958 p99=65.709 max=1977.500 us
+Recording observation: mean=6946.179 p50=6883.708 p99=7935.000 max=7956.542 us
+Process and encode: mean=9.807 p50=2.125 p99=108.042 max=1192.875 us
+Reply offer: mean=2.854 p50=1.084 p99=22.625 max=47.000 us
+Server total: mean=6975.360 p50=6904.375 p99=7969.959 max=8376.083 us
