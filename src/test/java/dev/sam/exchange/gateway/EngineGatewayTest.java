@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.util.UUID;
 import java.util.List;
 import java.util.ArrayList;
@@ -25,12 +26,15 @@ import java.util.function.Consumer;
 import org.agrona.DirectBuffer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.CancelResult;
 import dev.sam.exchange.engine.CommandResult;
 import dev.sam.exchange.protocol.SbeRequestCodec;
 import dev.sam.exchange.transport.AeronRequestClient;
+import dev.sam.exchange.transport.ClientConfig;
 import dev.sam.exchange.transport.CommandRequest;
 import dev.sam.exchange.transport.CommandResponse;
 import io.aeron.Publication;
@@ -170,6 +174,64 @@ class EngineGatewayTest {
       release.countDown();
       gateway.close();
     }
+  }
+
+  @Test
+  void diagnosticsDistinguishQueueOverflowFromLifecycleRejectionAndCountDrainedWork() throws Exception {
+    CountDownLatch entered = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    GatewayDiagnostics diagnostics = new GatewayDiagnostics();
+    EngineGateway gateway = blockedGateway(1, entered, release, diagnostics);
+    assertRejected(gateway.submit(request(90)));
+    gateway.start();
+    try {
+      var first = gateway.submit(request(1));
+      await(entered);
+      var second = gateway.submit(request(2));
+      assertRejected(gateway.submit(request(3)));
+      release.countDown();
+      assertEquals(cancelResult(request(1)), first.get(3, TimeUnit.SECONDS));
+      assertEquals(cancelResult(request(2)), second.get(3, TimeUnit.SECONDS));
+    } finally {
+      release.countDown();
+      gateway.close();
+    }
+    assertRejected(gateway.submit(request(91)));
+    String report = diagnostics.summarize();
+    for (String expected : List.of("Gateway accepted: 2", "Gateway activated: 2", "Gateway queue full: 1",
+        "Gateway queue high-water (observed): 1", "Gateway active high-water: 1", "Gateway successful offers: 2",
+        "Gateway retries: 0")) {
+      assertTrue(report.contains(expected), report);
+    }
+    var wait = java.util.regex.Pattern.compile("Gateway queue wait mean: ([0-9.]+) us").matcher(report);
+    assertTrue(wait.find(), report);
+    assertTrue(Double.parseDouble(wait.group(1)) > 0, report);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void diagnosticsSeparateOfferTimeoutsFromReplyTimeoutsAndRetries(boolean offered) throws Exception {
+    GatewayDiagnostics diagnostics = new GatewayDiagnostics();
+    AeronRequestClient client = new AeronRequestClient(null, null, new ClientConfig(Duration.ofMillis(20), 2)) {
+      @Override
+      public long trySend(DirectBuffer buffer, int offset, int length) {
+        return offered ? 128 : Publication.BACK_PRESSURED;
+      }
+      @Override
+      public int pollResponses(Consumer<CommandResponse> onResponse, int fragmentLimit) {
+        return 0;
+      }
+    };
+    try (EngineGateway gateway = new EngineGateway(client, 1, 1, diagnostics)) {
+      gateway.start();
+      var result = gateway.submit(request(1));
+      assertThrows(ExecutionException.class, () -> result.get(3, TimeUnit.SECONDS));
+    }
+    String report = diagnostics.summarize();
+    assertTrue(report.contains("Gateway successful offers: " + (offered ? 2 : 0)), report);
+    assertTrue(report.contains("Gateway retries: " + (offered ? 1 : 0)), report);
+    assertTrue(report.contains("Gateway reply timeouts: " + (offered ? 2 : 0)), report);
+    assertTrue(report.contains("Gateway offer timeouts: " + (offered ? 0 : 1)), report);
   }
 
   @Test
@@ -345,13 +407,18 @@ class EngineGatewayTest {
   }
 
   private static EngineGateway blockedGateway(int capacity, CountDownLatch entered, CountDownLatch release) {
+    return blockedGateway(capacity, entered, release, null);
+  }
+
+  private static EngineGateway blockedGateway(int capacity, CountDownLatch entered, CountDownLatch release,
+      GatewayDiagnostics diagnostics) {
     return new EngineGateway(client(request -> {
       if (request.command().orderId() == 1L) {
         entered.countDown();
         await(release);
       }
       return cancelResult(request);
-    }), capacity);
+    }), capacity, 1, diagnostics);
   }
 
   private static void assertRejected(CompletableFuture<CommandResult> result) {
