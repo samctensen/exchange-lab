@@ -24,9 +24,13 @@ public class AeronEngineServer {
     String archiveArgument = null;
     boolean quiet = false;
     EngineStageTimings stageTimings = null;
+    Integer configuredLogWindow = null;
     for (String arg : args) {
       if ("--quiet".equals(arg)) {
         quiet = true;
+      } else if (arg.startsWith("--log-window=") && configuredLogWindow == null) {
+        configuredLogWindow = AeronEngineAgent
+            .validateLogWindow(Integer.parseInt(arg.substring("--log-window=".length())));
       } else if (arg.startsWith("--stage-timing=") && stageTimings == null) {
         String[] counts = arg.substring("--stage-timing=".length()).split(",", -1);
         if (counts.length != 2) {
@@ -37,9 +41,11 @@ public class AeronEngineServer {
         archiveArgument = arg;
       } else {
         throw new IllegalArgumentException(
-            "Usage: AeronEngineServer [archiveDirectory] [--quiet] [--stage-timing=warmupCount,sampleCount]");
+            "Usage: AeronEngineServer [archiveDirectory] [--quiet] [--stage-timing=warmupCount,sampleCount] [--log-window=count]");
       }
     }
+
+    int logWindow = configuredLogWindow == null ? AeronEngineAgent.DEFAULT_LOG_WINDOW : configuredLogWindow;
 
     AtomicBoolean shutdownRequested = new AtomicBoolean(false);
     AtomicReference<Throwable> agentFailure = new AtomicReference<>();
@@ -77,14 +83,16 @@ public class AeronEngineServer {
         Subscription subscription = aeron.addSubscription("aeron:ipc", 1);
         Publication replies = aeron.addPublication("aeron:ipc", 2);
         // Busy spinning keeps polling for requests; budget a dedicated core for this runner.
-        AgentRunner runner = new AgentRunner(new BusySpinIdleStrategy(), errorHandler, null, new AeronEngineAgent(
-            subscription, replies, stateMachine, requestLog, !quiet, SystemNanoClock.INSTANCE, stageTimings))) {
+        AgentRunner runner = new AgentRunner(new BusySpinIdleStrategy(), errorHandler, null,
+            new AeronEngineAgent(subscription, replies, stateMachine, requestLog, !quiet, SystemNanoClock.INSTANCE,
+                stageTimings, logWindow))) {
 
       AgentRunner.startOnThread(runner);
 
       System.out.println("Server ready: " + aeronDirectory);
       System.out.println("Archive: " + archiveDirectory);
       System.out.println("Request recording: " + requestLog.recordingId());
+      System.out.println("Engine log window: " + logWindow);
       System.out.println("Waiting for requests.");
 
       // The runner processes requests. Main waits here to keep resources open.

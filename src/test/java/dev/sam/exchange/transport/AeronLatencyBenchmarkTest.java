@@ -36,10 +36,11 @@ import io.aeron.driver.MediaDriver;
 @Timeout(20)
 class AeronLatencyBenchmarkTest {
   @ParameterizedTest
-  @CsvSource({"0, 1, 1, sleep, true", "5, 12, 2, sleep, false", "5, 13, 4, sleep, false", "5, 19, 8, sleep, true",
-      "0, 3, 16, sleep, false", "0, 1, 1, spin, false", "5, 19, 8, spin, false"})
+  @CsvSource({"0, 1, 1, sleep, true, default", "5, 12, 2, sleep, false, default", "5, 13, 4, sleep, false, default",
+      "5, 19, 8, sleep, true, default", "0, 3, 16, sleep, false, default", "0, 1, 1, spin, false, default",
+      "5, 19, 8, spin, false, default", "5, 37, 32, sleep, true, 16", "5, 67, 32, sleep, true, 32"})
   void measuresFreshRequestsAfterWarmupAgainstAQuietServer(int warmup, int samples, int maxInFlight, String idleMode,
-      boolean stageTiming, @TempDir Path tempDir) throws Exception {
+      boolean stageTiming, String logWindow, @TempDir Path tempDir) throws Exception {
     Path archiveDirectory = tempDir.resolve("benchmark-archive");
     Path serverLog = tempDir.resolve("server.log");
     Path benchmarkLog = tempDir.resolve("benchmark.log");
@@ -47,6 +48,8 @@ class AeronLatencyBenchmarkTest {
     List<String> serverArgs = new ArrayList<>(List.of(archiveDirectory.toString(), "--quiet"));
     if (stageTiming)
       serverArgs.add("--stage-timing=" + warmup + "," + samples);
+    if (!logWindow.equals("default"))
+      serverArgs.add("--log-window=" + logWindow);
     Process server = startMain(tempDir, serverLog, AeronEngineServer.class, serverArgs.toArray(String[]::new));
     Process benchmark = null;
     try {
@@ -100,6 +103,7 @@ class AeronLatencyBenchmarkTest {
 
       String output = Files.readString(serverLog);
       assertTrue(output.contains("Server ready:"), "Quiet mode must retain startup information");
+      assertTrue(output.contains("Engine log window: " + (logWindow.equals("default") ? "8" : logWindow)), output);
       assertFalse(output.contains("Result:"), "Per-order result logging must be disabled in quiet mode\n" + output);
       assertFalse(output.contains("Exception"), output);
       if (stageTiming) {
