@@ -21,6 +21,7 @@
     <sbe.version>1.40.1</sbe.version>
     <grpc.version>1.84.0</grpc.version>
     <protobuf.version>3.25.9</protobuf.version>
+    <netty.version>4.2.18.Final</netty.version>
   </properties>
 
   <dependencyManagement>
@@ -43,6 +44,16 @@
   </dependencyManagement>
 
   <dependencies>
+    <dependency>
+      <groupId>io.netty</groupId>
+      <artifactId>netty-codec-http</artifactId>
+      <version>${netty.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>2.14.0</version>
+    </dependency>
     <dependency>
       <groupId>io.grpc</groupId>
       <artifactId>grpc-protobuf</artifactId>
