@@ -10,7 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.Future;
+import java.util.HashSet;
 import java.util.concurrent.TimeUnit;
 
 import org.agrona.ExpandableArrayBuffer;
@@ -20,10 +20,6 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 import dev.sam.exchange.engine.CancelResult;
-import dev.sam.exchange.gateway.proto.CancelOrder;
-import dev.sam.exchange.gateway.proto.ExchangeServiceGrpc;
-import dev.sam.exchange.gateway.proto.SubmitRequest;
-import dev.sam.exchange.gateway.proto.SubmitResponse;
 import dev.sam.exchange.protocol.SbeRequestCodec;
 import dev.sam.exchange.protocol.SbeResponseCodec;
 import dev.sam.exchange.transport.AeronRequestClient;
@@ -35,15 +31,11 @@ import io.aeron.Publication;
 import io.aeron.Subscription;
 import io.aeron.driver.MediaDriver;
 import io.aeron.logbuffer.FragmentHandler;
-import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
-import io.grpc.Server;
-import io.grpc.ServerBuilder;
 
-class GrpcGatewayPipelineTest {
+class WebSocketGatewayPipelineTest {
   @Test
   @Timeout(20)
-  void concurrentRpcCallsRespectTheWindowAndReceiveTheirOwnAeronReplies(@TempDir Path tempDir) throws Exception {
+  void concurrentSocketsRespectTheWindowAndReceiveTheirOwnAeronReplies(@TempDir Path tempDir) throws Exception {
     ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
     try (
         MediaDriver driver = MediaDriver
@@ -60,56 +52,54 @@ class GrpcGatewayPipelineTest {
       awaitConnected(requests);
       awaitConnected(peerReplies);
       gateway.start();
-      Server server = ServerBuilder.forPort(0).addService(new GrpcExchangeService(gateway, new GrpcCommandMapper()))
-          .build().start();
-      ManagedChannel channel = ManagedChannelBuilder.forAddress("localhost", server.getPort()).usePlaintext().build();
-      try {
-        var stub = ExchangeServiceGrpc.newFutureStub(channel).withDeadlineAfter(10, TimeUnit.SECONDS);
-        List<Future<SubmitResponse>> results = new ArrayList<>();
-        for (long id = 1; id <= 16; id++) {
-          SubmitRequest request = SubmitRequest.newBuilder().setRequestId(new UUID(0L, id).toString())
-              .setCancel(CancelOrder.newBuilder().setOrderId(1000 + id)).build();
-          results.add(stub.submit(request));
+      try (WebSocketGateway server = new WebSocketGateway(gateway, 0)) {
+        server.start();
+        try (var first = new WebSocketTestClient(server.port()); var second = new WebSocketTestClient(server.port())) {
+          for (long id = 1; id <= 16; id++) {
+            String request = "{\"requestId\":\"" + new UUID(0L, id) + "\",\"cancel\":{\"orderId\":\"" + (1000 + id)
+                + "\"}}";
+            var client = id % 2 == 1 ? first : second;
+            client.socket.sendText(request, true).get(3, TimeUnit.SECONDS);
+          }
+
+          SbeRequestCodec requestCodec = new SbeRequestCodec();
+          List<CommandRequest> received = new ArrayList<>();
+          FragmentHandler handler = (buffer, offset, length, header) -> received
+              .add(requestCodec.decode(buffer, offset, length));
+          awaitRequests(peerRequests, handler, received, 8);
+
+          // Withhold every reply. A serial gateway cannot reach eight; an unbounded one sends more.
+          long observationDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(100);
+          SleepingIdleStrategy idle = new SleepingIdleStrategy();
+          do {
+            int fragments = peerRequests.poll(handler, 16);
+            assertEquals(8, received.size(), "No ninth request may be sent while all eight slots are occupied");
+            idle.idle(fragments);
+          } while (System.nanoTime() - observationDeadline < 0);
+          // The two connections can interleave. Reverse the actual Aeron arrival order.
+          replyInReverse(peerReplies, received.subList(0, 8));
+          awaitRequests(peerRequests, handler, received, 16);
+          replyInReverse(peerReplies, received.subList(8, 16));
+          assertEquals(16, received.stream().map(CommandRequest::requestId).distinct().count());
+
+          var seen = new HashSet<UUID>();
+          for (int index = 0; index < 16; index++) {
+            var client = index % 2 == 0 ? first : second;
+            var response = client.response();
+            UUID requestId = UUID.fromString(response.get("requestId").getAsString());
+            long id = requestId.getLeastSignificantBits();
+            assertTrue(id >= 1 && id <= 16);
+            assertEquals(index % 2 == 0 ? 1 : 0, id % 2, "Reply reached the wrong socket");
+            assertTrue(seen.add(requestId), "Duplicate response");
+            assertEquals(Long.toString(1000 + id), response.getAsJsonObject("cancel").get("orderId").getAsString());
+            assertFalse(response.getAsJsonObject("cancel").get("cancelled").getAsBoolean());
+          }
+          assertEquals(16, seen.size());
+          assertTrue(errors.isEmpty(), errors::toString);
         }
-
-        SbeRequestCodec requestCodec = new SbeRequestCodec();
-        List<CommandRequest> received = new ArrayList<>();
-        FragmentHandler handler = (buffer, offset, length, header) -> received
-            .add(requestCodec.decode(buffer, offset, length));
-        awaitRequests(peerRequests, handler, received, 8);
-
-        // Withhold every reply. A serial gateway cannot reach eight; an unbounded one sends more.
-        long observationDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(100);
-        SleepingIdleStrategy idle = new SleepingIdleStrategy();
-        do {
-          int fragments = peerRequests.poll(handler, 16);
-          assertEquals(8, received.size(), "No ninth request may be sent while all eight slots are occupied");
-          idle.idle(fragments);
-        } while (System.nanoTime() - observationDeadline < 0);
-        assertTrue(results.stream().noneMatch(Future::isDone), "Every caller must still be waiting for its reply");
-
-        // gRPC can deliver requests in any order. Reverse the actual Aeron arrival order.
-        replyInReverse(peerReplies, received.subList(0, 8));
-        awaitRequests(peerRequests, handler, received, 16);
-        replyInReverse(peerReplies, received.subList(8, 16));
-        assertEquals(16, received.stream().map(CommandRequest::requestId).distinct().count());
-
-        for (int index = 0; index < results.size(); index++) {
-          long id = index + 1L;
-          SubmitResponse response = results.get(index).get(3, TimeUnit.SECONDS);
-          assertEquals(new UUID(0L, id).toString(), response.getRequestId());
-          assertEquals(SubmitResponse.ResultCase.CANCEL, response.getResultCase());
-          assertEquals(1000 + id, response.getCancel().getOrderId());
-          assertFalse(response.getCancel().getCancelled());
-        }
-        assertTrue(errors.isEmpty(), errors::toString);
       } finally {
-        channel.shutdownNow();
-        server.shutdownNow();
         // If an assertion fails, reject any unsent work while the gateway drains during close.
         requests.close();
-        assertTrue(channel.awaitTermination(3, TimeUnit.SECONDS), "gRPC client did not stop");
-        assertTrue(server.awaitTermination(3, TimeUnit.SECONDS), "gRPC server did not stop");
       }
     }
   }
