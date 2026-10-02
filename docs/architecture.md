@@ -1,22 +1,21 @@
 # Exchange architecture and backend integration
 
-The exchange runs as a Java process with an embedded Aeron Media Driver and Archive. It owns matching, the live order book, the ordered request recording, and the request-response cache. A separate Java gRPC gateway exposes this engine to the demo client and a future Go backend.
+The exchange runs as a Java process with an embedded Aeron Media Driver and Archive. It owns matching, the live order book, the ordered request recording, and the request-response cache. A separate Java WebSocket gateway exposes JSON order submission to browser, mobile, and backend clients. The earlier gRPC service and protobuf contract have been removed.
 
 ## Current architecture
 
-The engine, gateway, and demo clients below exist today. The Go backend remains future work.
+Run one gateway instance for the current lesson; multi-gateway reply isolation remains future work.
 
 ```mermaid
 flowchart TB
-  GrpcClient["GrpcGatewayClient<br/>16 concurrent RPCs"]
+  Browser["Browser / mobile / backend client"]
   Client["AeronEngineClient<br/>IPC demo"]
-  subgraph Gateway["Java gRPC gateway process"]
-    Service["GrpcExchangeService<br/>protobuf / domain mapping"]
+  subgraph Gateway["Java WebSocket gateway process"]
+    Socket["WebSocketOrderHandler<br/>JSON + per-connection limits"]
     Queue["EngineGateway queue<br/>128 waiting requests"]
-    Worker["One transport worker<br/>up to 8 active UUIDs"]
-    Service --> Queue
-    Queue --> Worker
-    Worker -->|"complete matching future"| Service
+    Worker["One Aeron worker<br/>up to 8 active UUIDs"]
+    Socket --> Queue --> Worker
+    Worker -->|"schedule completion on socket event loop"| Socket
   end
   subgraph Server["Exchange server process"]
     Agent["AeronEngineAgent<br/>one engine thread"]
@@ -32,19 +31,21 @@ flowchart TB
     State -->|"CommandResponse"| Agent
     Archive -.->|"startup replay / stream 2002"| State
   end
+  Browser <-->|"JSON / WebSocket"| Socket
   Client -->|"SBE request / IPC stream 1"| Agent
   Agent -->|"SBE response / IPC stream 2"| Client
-  GrpcClient <-->|"protobuf / gRPC"| Service
   Worker -->|"SBE request / IPC stream 1"| Agent
   Agent -->|"SBE response / IPC stream 2"| Worker
 ```
 
-The IPC arrows use the server-owned Media Driver's shared-memory buffers. The Archive recording is persistent storage; driver buffers are disposable. The gateway currently listens on plaintext gRPC port 50051. There is no application HTTP API or Go backend yet.
+The IPC arrows use the server-owned Media Driver's shared-memory buffers. The Archive recording is persistent storage; driver buffers are disposable. The WebSocket launcher binds `127.0.0.1:8080/orders`. There is no public HTTP application, authentication, or TLS yet.
+
+The WebSocket adapter adds bounded Netty connections and strict JSON conversion. It hands domain commands to the existing gateway and schedules completions back onto each socket's event loop. JSON encoding and socket writes stay off the Aeron worker. Disconnecting a socket does not cancel an accepted command. See [the contract, browser example, and limits](websocket-contract.md).
 
 ### The important boundaries
 
 - **Transport:** one `EngineGateway` worker owns `AeronRequestClient.trySend()` and `pollResponses()`. It correlates complete SBE responses with active UUIDs. Each active request owns its encoded bytes, phase, attempt count, and deadline. Fragment assemblers deliver complete messages to the decoders. The latency benchmark also uses the nonblocking methods, with a configurable window and one successful send per request. The blocking `send()` method remains available for callers that wait for one reply at a time.
-- **Admission:** the gRPC gateway holds up to 128 waiting requests and eight active requests. A full queue rejects new submissions. The gateway launcher exposes `--max-in-flight`, `--queue-capacity`, and `--port`; its defaults stay 8/128/50051. Optional `--diagnostics` aggregates queue waits, admission pressure, retries, and attempt timeouts through shutdown. The two-argument gateway constructor defaults to one active request. The engine agent offers up to eight requests to its ordered log by default; server flag `--log-window=<positive integer>` configures this bound independently of gateway concurrency. It executes only the recorded queue head and retains one pending reply; an unsent reply blocks further admission and execution. The order book still has a single writer.
+- **Admission:** the gateway holds up to 128 waiting requests and eight active requests. A full queue produces an explicit admission rejection. `WebSocketGatewayServer` exposes `--max-in-flight`, `--queue-capacity`, and `--port`; defaults are 8/128/8080. Each connection has at most 32 pending responses, and the listener admits at most 128 connections. The engine independently offers up to eight requests to its ordered log by default; `--log-window=<positive integer>` configures that bound. It executes only the recorded FIFO head and retains one pending reply; an unsent reply blocks further admission and execution. The order book still has a single writer.
 - **Ordering:** the engine agent chooses one processing order across incoming client sessions. Its single `ExclusivePublication` records that order. Separate client sessions have no shared ordering guarantee by themselves. [Aeron ordering documentation](https://aeron.io/docs/aeron/aeron-channel-stream-session/)
 - **Persistence:** a successful publication offer only places bytes in Aeron's buffer. The agent waits across `doWork()` passes until Archive's recording position reaches that message's end position. File/catalog sync level 2 forces data and metadata before the engine proceeds.
 - **Execution:** `RequestStateMachine` handles retries and UUID conflicts, then delegates fresh commands to `MatchingEngine`. It caches successful results and business rejections. `OrderBook` holds the authoritative live order state.
@@ -52,58 +53,13 @@ The IPC arrows use the server-owned Media Driver's shared-memory buffers. The Ar
 
 Known UUIDs return their cached response or a conflict response without appending again. If the process stops after recording but before execution or reply delivery, replay applies the request; retrying the same UUID returns its original outcome. An unanswered request has an **unknown outcome**, not a confirmed failure.
 
-## Future Go backend integration
+## Backend integration
 
-The Go backend would call the existing Java gRPC gateway. It does not need to share the engine's driver directory or implement the SBE protocol.
+A backend in Go, Java, or another language can connect using the same WebSocket JSON contract. It keeps a connection open, sends requests with stable UUIDs, and matches asynchronous replies by UUID. It does not need protobuf classes, SBE codecs, or access to the Media Driver directory.
 
-```mermaid
-flowchart TB
-  User["Web app / mobile app / trading client"]
-  subgraph Backend["Future Go backend process"]
-    API["HTTP API<br/>authentication and request validation"]
-    Grpc["Generated Go gRPC client"]
-    Store[("Backend database<br/>users and durable request-ID mapping")]
-    API --> Grpc
-    API <--> Store
-    Grpc -->|"result or unresolved status"| API
-  end
-  subgraph Host["Exchange host"]
-    Gateway["Existing Java gRPC gateway<br/>bounded queue + in-flight window"]
-    Agent["Existing exchange engine<br/>Archive + state machine + matching"]
-    Gateway <-->|"SBE / Aeron IPC"| Agent
-  end
-  User -->|"HTTPS command + idempotency key"| API
-  API -->|"HTTP result or unresolved status"| User
-  Grpc <-->|"protobuf / gRPC"| Gateway
-```
+The browser/mobile path can reach the gateway directly once production identity and security controls exist. A separate backend can own users, API metadata, and query projections without becoming a second writer of the live order book. If that backend submits orders on a caller's behalf, it must preserve the caller's logical request identity across reconnects and restarts and reject reuse with a changed command.
 
-The integration responsibilities are:
-
-1. The HTTP handler authenticates the caller and checks the request shape. It maps the caller's idempotency key to one stable engine UUID and the exact command. Preserve that mapping across backend restarts; scope keys to the caller and reject reuse with changed payloads.
-2. The backend makes a gRPC call with that UUID and command. The Java service maps protobuf to `CommandRequest` and submits it to the bounded gateway queue. Admission failures become `UNAVAILABLE` responses.
-3. One dedicated gateway worker owns the publication, subscription, and `AeronRequestClient`. Each pass polls responses, checks deadlines, admits work, and attempts nonblocking offers. A response completes the future associated with its UUID. Each successful offer counts as an attempt; temporary back pressure does not consume the retry budget. Active UUIDs are not overwritten by queued requests with the same UUID.
-4. When the matching response arrives, the API returns the business result. If a timeout occurs after possible submission, preserve the UUID and expose an unresolved outcome. HTTP cancellation does not roll back an exchange command. The caller can retry the same logical request without creating a new order.
-
-Keep `MatchingEngine` and `OrderBook` inside the exchange. The backend's database can own users, API metadata, and request-ID mappings. That database does not become a second writer of the live book. Persisting the backend UUID mapping and recording an exchange request are two separate operations; crash recovery must resume with the same UUID rather than inventing a new one.
-
-### If the backend runs on another machine
-
-`aeron:ipc` requires shared local memory, so a remote backend cannot connect by pointing at the exchange's driver directory. Aeron clients in separate local processes can share a Media Driver; network transport uses UDP. [Aeron Media Driver documentation](https://aeron.io/docs/aeron/media-driver/)
-
-A gateway on the exchange host lets a remote backend use the same gRPC contract:
-
-```mermaid
-flowchart LR
-  Remote["Backend on another host"]
-  subgraph Host["Exchange host"]
-    Gateway["Existing Java gRPC gateway<br/>bounded queue + transport worker"]
-    Engine["Existing exchange"]
-    Gateway <-->|"Aeron IPC"| Engine
-  end
-  Remote <-->|"gRPC; authentication and TLS still needed"| Gateway
-```
-
-Alternatively, we can configure Aeron UDP publications/subscriptions on both hosts, including reply routing and deployment/network policy. The current hard-coded IPC endpoints do not implement that option. Either boundary preserves the same engine-side ordering, recording, and execution flow.
+The current loopback listener accepts local clients only. Remote access requires an explicit deployment design with WSS/TLS and authentication. For a gateway on a different host from the engine, Aeron UDP can replace IPC after configuring both hosts and their reply routes. Pointing a remote process at a driver directory cannot provide IPC across machines. [Aeron Media Driver documentation](https://aeron.io/docs/aeron/media-driver/)
 
 ## What still needs to be designed
 
@@ -112,6 +68,6 @@ Alternatively, we can configure Aeron UDP publications/subscriptions on both hos
 - **Scale:** gateway queues and active requests are bounded, and UUID correlation supports multiple outstanding requests. The engine still waits for recording and reply delivery per command. Server-side batching, response-cache retention, Archive retention, and snapshots remain future work.
 - **Availability:** Archive currently persists one local engine. Replication, failover, and Aeron Cluster remain future work.
 
-Graceful gateway shutdown rejects new submissions and drains queued and active requests before releasing Aeron resources. An unexpected worker exit fails all remaining futures; requests successfully offered at least once carry an unknown-outcome diagnostic. RPC deadlines and cancellation do not undo accepted commands.
+Graceful gateway shutdown rejects new submissions and drains queued and active requests before releasing Aeron resources. An unexpected worker exit fails all remaining futures; requests successfully offered at least once carry an unknown-outcome diagnostic. WebSocket disconnects and client-side timeouts do not undo accepted commands.
 
-The next engine lesson is a bounded queue of logged requests, processed in order as Archive's recorded position reaches their end positions.
+The next gateway lesson is two gateway instances with isolated Aeron reply routing, followed by reconnect tests across those instances. Production browser access also needs WSS, authenticated sessions, and account/ownership/risk checks before accepting untrusted orders.

@@ -1,5 +1,11 @@
 # Full gRPC path: concurrency, queue pressure, and deadlines
 
+> Historical measurement: the gRPC adapter and benchmark launcher have been retired in
+> favor of the WebSocket gateway. These results describe the earlier implementation, not
+> current WebSocket performance. The merged gRPC code is preserved at commit
+> `ff7b85b46bb74fa320aa49b5ac87adb3f8b44759`; use a separate checkout of that revision
+> when reproducing it. Saved data and reproduction artifacts below are retained.
+
 ## Conclusions
 
 **The larger-window throughput gain survives the gRPC gateway.** Matching client, gateway, and engine concurrency at 32 delivered about 4,018 successful requests/s with 7.82 ms median latency and 8.87 ms p99. At 8, throughput was about 1,031/s. All 50,000 measured RPCs in the 25 normal comparison runs succeeded.

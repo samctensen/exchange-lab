@@ -61,7 +61,7 @@ move in global insertion order without changing priority at any one price.
 
 The initial book and command objects are prepared outside the timed loop. Commands
 reuse IDs only after the previous order is removed. This measures the pure matching
-engine; it does not invoke UUID deduplication, codecs, gRPC, Aeron, or Archive.
+engine; it does not invoke UUID deduplication, codecs, WebSockets, Aeron, or Archive.
 
 ## Reading the harness
 

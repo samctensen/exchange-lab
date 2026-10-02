@@ -19,7 +19,7 @@ The project currently uses plain Java 25, Maven, and JUnit 5:
 - Request deduplication across client reconnects, clean restarts, and abrupt process restarts.
 - Bounded client retries after reply timeouts, reusing the same UUID and command.
 - A bounded gateway queue and in-flight window, with one worker owning Aeron offers, reply polling, and UUID correlation.
-- A versioned protobuf contract, a separate Java gRPC gateway process, and a runnable gRPC client.
+- A loopback WebSocket gateway with strict JSON orders, bounded connections and requests, and reconnect-safe request IDs.
 - A server that stays available between client sessions and closes its resources on a shutdown request.
 
 This is a learning implementation. The book indexes bid and ask price levels separately,
@@ -28,9 +28,10 @@ The server processes commands on one thread.
 
 See [the current exchange architecture](docs/architecture.md#current-architecture) for the existing process boundaries.
 
-The selected backend integration is now Go → gRPC Java gateway → Aeron engine. See
-[the gRPC contract guide](docs/grpc-contract.md) for the schema, generated classes,
-error semantics, and local run instructions.
+The browser/mobile path is WebSocket → Java gateway → Aeron/SBE → engine. See
+[the WebSocket contract guide](docs/websocket-contract.md) for the local endpoint,
+messages, retry semantics, and production work still ahead. Backend services can use
+the same WebSocket contract; the previous gRPC adapter and protobuf generation have been removed.
 
 ## How a request moves through the system
 
@@ -52,10 +53,11 @@ The server remembers each completed request's UUID, command, and response. Retry
 
 After a reply timeout, the client resends the same request, up to three total attempts by default. A delayed matching reply completes the request; replies without an active matching request are ignored. If all attempts go unanswered, that request fails with its UUID and an unknown outcome, since the server may already have processed it. The gateway still drains other accepted requests before a successful close returns. In the IPC demo, both orders are queued before waiting for results, and an unknown outcome produces a nonzero process exit. A send failure on a later attempt also preserves the request UUID and unknown-outcome diagnostic.
 
-The gRPC gateway allows 128 queued requests and eight active requests. Its worker polls replies,
+The WebSocket gateway allows 128 queued requests and eight active requests. Its worker polls replies,
 checks deadlines, admits queued work, and attempts nonblocking offers. Each active request keeps
-its encoded bytes, UUID, attempt count, and deadline. The engine still records and processes one
-request at a time; this window lets the gateway send more work while earlier replies are pending.
+its encoded bytes, UUID, attempt count, and deadline. The engine executes one recorded FIFO head
+at a time; its bounded log window lets requests wait for Archive together while the gateway
+keeps earlier replies in flight.
 
 ### Ordering, recording, and recovery
 
@@ -86,19 +88,15 @@ mvn verify           # Build, test, and check formatting
 mvn spotless:apply   # Format Java sources
 ```
 
-### Run the gRPC gateway in Zed
+### Run the WebSocket gateway in Zed
 
 1. Run `AeronEngineServer.main` and leave it running.
-2. Run `GrpcGatewayServer.main` and wait for `gRPC gateway listening on port 50051`.
-3. Run `GrpcGatewayClient.main`. It submits 16 ten-lot bids at 100, with order IDs 0–15 and distinct request UUIDs, before waiting for their protobuf responses.
-4. Stop the gateway with **⌃C** before stopping the engine so accepted commands can finish.
+2. Run `WebSocketGatewayServer.main` and wait for `ws://127.0.0.1:8080/orders`.
+3. Submit JSON orders using [the browser example and contract](docs/websocket-contract.md).
+4. Stop the gateway with **⌃C** before stopping the engine.
 
-The gateway uses the same Aeron directory as the engine and a plaintext gRPC listener on port 50051.
-The demo client generates new request UUIDs each run but reuses the same order IDs; rerunning it can
-produce duplicate-order rejections. It prints successful RPC responses to stdout and each RPC
-failure, including its request UUID and cause, to stderr, then continues through the batch.
-Retrying an uncertain request must reuse its original UUID
-and command. See [the gRPC guide](docs/grpc-contract.md) for status mapping and shutdown behavior.
+This endpoint is local-only and has no authentication or TLS. Run one gateway launcher
+at a time for this lesson; isolated routing between gateway instances is still future work.
 
 Zed's class play button supplies Maven's `exec.args` when launching Java. The SBE generation
 execution pins its own schema argument so those launch arguments do not replace the schema path.
@@ -144,7 +142,7 @@ Use a dedicated server with a **new, empty Archive directory for each benchmark 
 3. Run `AeronLatencyBenchmark.main`. Defaults are **500 warmup requests**, **2,000 measured requests**, **one request in flight**, and **sleeping client polling**. Optional program arguments are `warmupCount sampleCount maxInFlight idleMode`, for example `500 2000 8 spin`; warmup may be zero, samples and window size must be positive, and idle mode is `sleep` or `spin`. The window limits outstanding client requests; the engine's log window defaults to eight entries. `sleep` uses `SleepingIdleStrategy`, while `spin` uses `BusySpinIdleStrategy` on the benchmark's polling thread.
 4. Stop the benchmark server with **⌃C** when finished. The benchmark closes its client connections and leaves the server running.
 
-The server accepts `--log-window=<positive integer>` to configure how many offered requests can await recording/execution. For example, server arguments `data/latency-run-16 --quiet --log-window=16` pair with benchmark arguments `500 2000 16 sleep`. Startup prints the selected engine window. This bound is independent of the client's outstanding-request limit and the gRPC gateway's eight active requests. The default remains eight; increasing it permits more queued work but does not add engine threads or change Archive's file/catalog sync levels (both remain 2). The engine executes recorded requests in FIFO order and blocks admission while a reply is unsent.
+The server accepts `--log-window=<positive integer>` to configure how many offered requests can await recording/execution. For example, server arguments `data/latency-run-16 --quiet --log-window=16` pair with benchmark arguments `500 2000 16 sleep`. Startup prints the selected engine window. This bound is independent of the client's outstanding-request limit and the WebSocket gateway's eight active requests. The default remains eight; increasing it permits more queued work but does not add engine threads or change Archive's file/catalog sync levels (both remain 2). The engine executes recorded requests in FIFO order and blocks admission while a reply is unsent.
 
 For an engine-only comparison, hold the client at `32` and test engine windows `8`, `16`, and `32`. Matching both windows at each value instead measures three different concurrency levels. Requests waiting in inbound IPC before engine admission contribute to client latency but are outside server stage timing.
 
@@ -160,7 +158,7 @@ The [28 September pipeline comparison](benchmarks/results/2026-09-28-aeron-pipel
 
 The [sleeping versus busy-spin comparison](benchmarks/results/2026-09-28-aeron-idle-strategies/report.md) repeats all four windows with both client strategies and measures CPU use. On this Mac and workload, spinning roughly doubled client CPU without a consistent throughput benefit.
 
-The [1 October engine log-window comparison](benchmarks/results/2026-10-01-aeron-log-windows/report.md) compares engine/client windows 8, 16, and 32 across 25 runs. Matching both at 32 delivered roughly four times the throughput of 8/8 with similar median and p99 latency in this cancellation workload. Holding the client at 32 confirms the engine bound matters; raising only client concurrency mostly adds waiting. The default remains eight; the full gRPC comparison below tests the gateway path.
+The [1 October engine log-window comparison](benchmarks/results/2026-10-01-aeron-log-windows/report.md) compares engine/client windows 8, 16, and 32 across 25 runs. Matching both at 32 delivered roughly four times the throughput of 8/8 with similar median and p99 latency in this cancellation workload. Holding the client at 32 confirms the engine bound matters; raising only client concurrency mostly adds waiting. The default remains eight; the historical gRPC comparison below records the earlier gateway path.
 
 #### Locate time spent inside the server
 
@@ -188,26 +186,12 @@ Counter discovery uses numeric type IDs and the Archive ID. Diagnostics require 
 
 The [1 October Archive counter comparison](benchmarks/results/2026-10-01-aeron-archive-counters/report.md) records ten runs. Median aggregate write time was 99.20% of client elapsed time at window 1 and 99.91% at window 8. This points toward the timed write/force path; it does not separate the two calls or measure physical storage latency directly.
 
-### Measure the full gRPC path
+### Historical gateway measurements
 
-`GrpcLatencyBenchmark` exercises localhost TCP → protobuf mapping → the bounded gateway → SBE/Aeron → Archive → engine → correlated gRPC response. Use three processes with matching client/server versions and the usual `--add-opens` JVM option:
-
-1. Start `AeronEngineServer` with a fresh Archive: `data/grpc-run-1 --quiet --log-window=8 --stage-timing=500,2000`.
-2. Start `GrpcGatewayServer` with `--max-in-flight=8 --queue-capacity=128 --port=50051 --diagnostics`.
-3. Run `GrpcLatencyBenchmark` with `500 2000 8 5000 50051` (warmup, samples, outstanding RPCs, per-RPC deadline in milliseconds, port).
-4. Stop the gateway with **⌃C** to print its diagnostics after accepted work drains; then stop the engine to print its stages.
-
-Gateway defaults remain eight active requests, 128 queued requests, port 50051, and diagnostics disabled. `--port=0` requests an ephemeral port, which startup prints. Duplicate/invalid flags fail before connecting. Engine, gateway, and benchmark concurrency are separate settings. Compare matched 8/16/32 settings, then hold client concurrency at 32 to observe queueing with smaller gateway/engine limits.
-
-The benchmark uses fresh UUIDs and missing-order cancellations. An asynchronous completion queue refills slots in completion order. Warmup drains fully before measurement; any warmup RPC failure or unexpected payload aborts the run. The client issues one application RPC per UUID with channel retries disabled. The gateway retains its existing five-second, three-attempt Aeron retry policy; diagnostics report successful resends. Request construction is outside each latency timer, while protobuf encoding, the gRPC call, and completion callback delivery are inside. Phase throughput also includes construction and completion handling; channel setup, warmup, report sorting, and shutdown are outside it. Zero warmup leaves connection/JIT startup in the measured phase.
-
-Measured RPC errors are counted rather than aborting the run. Reports show completed calls, successful replies, every non-OK gRPC status count, peak outstanding calls, completion throughput, and **successful throughput**. Terminal latency includes successful and failed calls; success latency includes valid replies only. Both use nearest-rank p50/p99/max. Always read success latency together with failure counts: fast rejection or timeout can make aggregate completion latency look attractive while useful work falls. Counts are bounded at 1,000,000; warmup may be zero, and all other numeric arguments must be positive (port at most 65535).
-
-Opt-in gateway diagnostics report accepted requests, queue-full rejections, activation count, observed queue high-water mark, active high-water mark, aggregate mean/max queue wait, successful Aeron offers, retries, and offer/reply deadline expirations. **These are lifetime values including warmup and shutdown drain**, not measured-phase deltas. Queue wait runs from submission before the admission lock to removal for activation, excluding SBE encoding. The worker can dequeue between an offer and the size sample, so queue high-water can undercount a transient peak. Counters are synchronized and introduce diagnostic overhead; keep the flag consistent across comparisons.
-
-A full queue currently maps to `UNAVAILABLE`, as do other gateway failures; correlate status counts with the internal queue-full counter. `DEADLINE_EXCEEDED` ends the client's wait and does not prove the command failed or was removed from the gateway. Accepted work can still reach Archive and execute after RPC cancellation. Gateway timeouts count its own per-attempt deadlines and are independent of the RPC deadline. This benchmark makes that distinction visible without changing command or cancellation semantics.
-
-The [1 October gRPC comparison](benchmarks/results/2026-10-01-grpc-windows/report.md) records 37 normal, queue-pressure, and deadline runs. Matching client/gateway/engine windows at 32 delivered about 4,018 successful requests/s with 8.87 ms p99. All normal comparison calls succeeded. The short-deadline probes returned zero successful RPC replies while 905 accepted commands completed in the engine, motivating explicit overload outcomes and cancellation-aware admission.
+The [1 October gRPC comparison](benchmarks/results/2026-10-01-grpc-windows/report.md)
+preserves the measurements from the retired adapter. Its report identifies the historical
+revision and reproduction artifacts. Those results do not measure the current WebSocket
+endpoint; a WebSocket latency benchmark is future work.
 
 ### Encode commands, requests, and responses with Simple Binary Encoding (SBE)
 
@@ -294,7 +278,7 @@ Code lives under `src/main/java/dev/sam/exchange`:
 - `persistence`: `ArchiveRuntime`, `ArchiveRequestLog`, and the narrow `RequestLog` interface used by the agent.
 - `protocol`: the text command codec and SBE adapters, with generated message codecs in `protocol.sbe` under the build output directory.
 - `transport`: Aeron demos, reusable `AeronRequestClient`, request/response codecs, request deduplication, and request recovery.
-- `gateway`: bounded `EngineGateway`, protobuf/domain mapping, the gRPC service, and server/client entry points. The shared contract is under `src/main/proto/exchange/v1`.
+- `gateway`: bounded `EngineGateway`, strict JSON/domain mapping, Netty WebSocket handling, and the standalone gateway launcher. The browser contract is documented in `docs/websocket-contract.md`.
 
 `AeronEngineClient.main` creates and closes the Aeron connections, assigns request UUIDs, and prints results. `AeronRequestClient` borrows the publication and subscription and handles encoding, retries, and correlated replies. Use each client instance from one thread, with one request at a time.
 

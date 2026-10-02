@@ -19,19 +19,11 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compiler.release>25</maven.compiler.release>
     <sbe.version>1.40.1</sbe.version>
-    <grpc.version>1.84.0</grpc.version>
-    <protobuf.version>3.25.9</protobuf.version>
+    <netty.version>4.2.18.Final</netty.version>
   </properties>
 
   <dependencyManagement>
     <dependencies>
-      <dependency>
-        <groupId>io.grpc</groupId>
-        <artifactId>grpc-bom</artifactId>
-        <version>${grpc.version}</version>
-        <type>pom</type>
-        <scope>import</scope>
-      </dependency>
       <dependency>
         <groupId>org.junit</groupId>
         <artifactId>junit-bom</artifactId>
@@ -44,22 +36,14 @@
 
   <dependencies>
     <dependency>
-      <groupId>io.grpc</groupId>
-      <artifactId>grpc-protobuf</artifactId>
+      <groupId>io.netty</groupId>
+      <artifactId>netty-codec-http</artifactId>
+      <version>${netty.version}</version>
     </dependency>
     <dependency>
-      <groupId>io.grpc</groupId>
-      <artifactId>grpc-stub</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>io.grpc</groupId>
-      <artifactId>grpc-netty-shaded</artifactId>
-      <scope>runtime</scope>
-    </dependency>
-    <dependency>
-      <groupId>com.google.protobuf</groupId>
-      <artifactId>protobuf-java</artifactId>
-      <version>${protobuf.version}</version>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>2.14.0</version>
     </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
@@ -85,37 +69,7 @@
   </dependencies>
 
   <build>
-    <extensions>
-      <!-- Select the native protoc binaries for the current OS and CPU, including Apple Silicon. -->
-      <extension>
-        <groupId>kr.motd.maven</groupId>
-        <artifactId>os-maven-plugin</artifactId>
-        <version>1.7.1</version>
-      </extension>
-    </extensions>
     <plugins>
-      <plugin>
-        <groupId>org.xolstice.maven.plugins</groupId>
-        <artifactId>protobuf-maven-plugin</artifactId>
-        <version>0.6.1</version>
-        <configuration>
-          <protocArtifact>com.google.protobuf:protoc:${protobuf.version}:exe:${os.detected.classifier}</protocArtifact>
-          <pluginId>grpc-java</pluginId>
-          <pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}</pluginArtifact>
-        </configuration>
-        <executions>
-          <execution>
-            <?m2e execute onConfiguration?>
-            <id>generate-grpc-contract</id>
-            <phase>generate-sources</phase>
-            <goals>
-              <!-- Messages first, then the RPC service base class and client stubs. -->
-              <goal>compile</goal>
-              <goal>compile-custom</goal>
-            </goals>
-          </execution>
-        </executions>
-      </plugin>
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>exec-maven-plugin</artifactId>
