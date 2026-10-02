@@ -64,7 +64,7 @@ public class EngineGateway implements AutoCloseable {
       if (state != State.RUNNING) {
         rejection = new RejectedExecutionException("Gateway is not running");
       } else if (!requests.offer(pendingRequest)) {
-        rejection = new RejectedExecutionException("request queue is full");
+        rejection = new GatewayOverloadedException("request queue is full");
         if (diagnostics != null)
           diagnostics.queueFull();
       } else if (diagnostics != null) {

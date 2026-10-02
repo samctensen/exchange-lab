@@ -397,6 +397,26 @@ class EngineGatewayTest {
     return new CommandRequest(new UUID(0L, id), new CancelOrder(id));
   }
 
+  @Test
+  void distinguishesQueueOverflowFromLifecycleRejection() throws Exception {
+    CountDownLatch entered = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    EngineGateway gateway = blockedGateway(1, entered, release);
+    gateway.start();
+    try {
+      gateway.submit(request(1));
+      await(entered);
+      gateway.submit(request(2));
+      var failure = assertThrows(CompletionException.class, () -> gateway.submit(request(3)).join());
+      assertInstanceOf(GatewayOverloadedException.class, failure.getCause());
+    } finally {
+      release.countDown();
+      gateway.close();
+    }
+    var stopped = assertThrows(CompletionException.class, () -> gateway.submit(request(4)).join());
+    assertFalse(stopped.getCause() instanceof GatewayOverloadedException);
+  }
+
   private static CommandResult cancelResult(CommandRequest request) {
     return new CancelResult(request.command().orderId(), false);
   }
