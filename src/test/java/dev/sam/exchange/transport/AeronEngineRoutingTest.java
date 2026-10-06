@@ -1,6 +1,7 @@
 package dev.sam.exchange.transport;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -131,6 +132,59 @@ class AeronEngineRoutingTest {
       IllegalStateException failure = assertThrows(IllegalStateException.class, fixture.agent::doWork);
       assertTrue(failure.getMessage().contains("Timed out sending reply"));
       assertEquals(List.of(request), fixture.log.accepted);
+    }
+  }
+
+  @Test
+  void anUnreadyRegistrationUsesTheOriginalReplyDeadline() {
+    try (Fixture fixture = new Fixture(); Client client = fixture.client()) {
+      CommandRequest request = new CommandRequest(new UUID(0, 1), new PlaceOrder(1, Side.BID, 100, 10));
+      fixture.send(client, request);
+      fixture.agent.doWork();
+      assertTrue(fixture.registry.find(client.route).isEmpty());
+
+      // Do not advance the driver: lookup must stay empty and must not extend the reply deadline.
+      fixture.clock.now = TimeUnit.SECONDS.toNanos(4);
+      assertEquals(0, fixture.agent.doWork());
+      fixture.clock.now = TimeUnit.SECONDS.toNanos(5);
+      IllegalStateException failure = assertThrows(IllegalStateException.class, fixture.agent::doWork);
+      assertTrue(failure.getMessage().contains("Timed out sending reply"));
+      assertEquals(List.of(request), fixture.log.accepted);
+      assertEquals(List.of(new OrderSnapshot((PlaceOrder) request.command(), 10)), fixture.book.snapshot());
+    }
+  }
+
+  @Test
+  void reconnectGetsTheCachedResultThroughANewRoute() {
+    try (Fixture fixture = new Fixture()) {
+      CommandRequest request = new CommandRequest(new UUID(0, 1), new PlaceOrder(1, Side.BID, 100, 10));
+      CommandResponse expected = new CommandResponse(request.requestId(), new PlaceResult(1, List.of(), 10));
+      long oldRoute;
+      Publication oldReplies;
+      try (Client first = fixture.client()) {
+        oldRoute = first.route;
+        fixture.send(first, request);
+        fixture.await(() -> {
+          first.poll();
+          return !first.received.isEmpty();
+        }, "receiving the original reply");
+        assertEquals(List.of(expected), first.received);
+        oldReplies = fixture.registry.find(oldRoute).orElseThrow();
+      }
+      fixture.await(() -> fixture.registry.find(oldRoute).isEmpty(), "cleaning up the departed connection");
+      assertTrue(oldReplies.isClosed());
+
+      try (Client reconnected = fixture.client()) {
+        assertFalse(oldRoute == reconnected.route);
+        fixture.send(reconnected, request);
+        fixture.await(() -> {
+          reconnected.poll();
+          return !reconnected.received.isEmpty();
+        }, "receiving the cached result after reconnect");
+        assertEquals(List.of(expected), reconnected.received);
+        assertEquals(List.of(request), fixture.log.accepted);
+        assertEquals(List.of(new OrderSnapshot((PlaceOrder) request.command(), 10)), fixture.book.snapshot());
+      }
     }
   }
 
