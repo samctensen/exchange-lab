@@ -127,6 +127,33 @@ The project configures it for Maven tests and Zed terminals. Include it in the l
 
 The engine runner uses `BusySpinIdleStrategy`, following [Aeron’s guidance for low-latency subscribers](https://github.com/aeron-io/aeron/wiki/Best-Practices-Guide#application-threads). It keeps polling when idle and can consume roughly one CPU core. Budget a dedicated core for this approach in production; this demo leaves CPU placement to the operating system and does not reserve or pin a core. Stop the server with **⌃C** when finished.
 
+### Run the response-channel demo in Zed
+
+Run [`AeronResponseChannelDemo.main`](src/main/java/dev/sam/exchange/transport/AeronResponseChannelDemo.java)
+with the same `--add-opens` JVM option. It starts its own embedded driver with a unique directory,
+two logical clients, and an echo server in one JVM. Each client sends one short ASCII message.
+
+```text
+Client A received: [A]
+Client B received: [B]
+Reply isolation verified: each client received only its own echo.
+```
+
+Both clients share request stream 1 and response stream 2. The routing comes from
+[Aeron response channels](https://github.com/aeron-io/aeron/wiki/Response-Channels):
+
+1. Each client creates a subscription with `control-mode=response`.
+2. Its request publication sets `response-correlation-id` to that subscription's `registrationId()`.
+3. The server sees a separate request `Image` for each client and creates a response publication
+   with `control-mode=response` and `response-correlation-id` set to that image's `correlationId()`.
+4. The server echoes each message through its source image's response publication. Aeron routes
+   it to the associated client; the client does not filter messages by their text.
+
+These IDs describe live transport connections. Our persistent request UUIDs serve a different purpose:
+recognizing retries even after reconnection or recovery. This standalone lesson introduces routing;
+the live engine/gateway still uses its existing reply stream. The demo uses five-second deadlines,
+sleeping waits, and automatic resource cleanup. It is not a latency benchmark.
+
 ### Measure order-book performance
 
 The [standalone JMH benchmarks](benchmarks/README.md) measure place/cancel and
