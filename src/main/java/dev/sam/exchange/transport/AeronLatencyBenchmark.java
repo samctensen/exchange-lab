@@ -58,8 +58,9 @@ public class AeronLatencyBenchmark {
     Measurement measured;
     String archiveReport = "";
     try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectory));
-        Publication publication = aeron.addPublication("aeron:ipc", 1);
-        Subscription replies = aeron.addSubscription("aeron:ipc", 2)) {
+        Subscription replies = aeron.addSubscription("aeron:ipc?control-mode=response", 2);
+        Publication publication = aeron.addPublication("aeron:ipc?response-correlation-id=" + replies.registrationId(),
+            1)) {
       // A timeout fails this run; automatic resends would change the workload being measured.
       AeronRequestClient client = new AeronRequestClient(publication, replies,
           new ClientConfig(Duration.ofSeconds(5), 1));
