@@ -450,8 +450,9 @@ class AeronEngineServerTest {
     try (
         Aeron aeron = Aeron
             .connect(new Aeron.Context().aeronDirectoryName(driverDirectory.toString()).errorHandler(errors::add));
-        Publication commands = aeron.addPublication("aeron:ipc", 1);
-        Subscription replies = aeron.addSubscription("aeron:ipc", 2)) {
+        Subscription replies = aeron.addSubscription("aeron:ipc?control-mode=response", 2);
+        Publication commands = aeron.addPublication("aeron:ipc?response-correlation-id=" + replies.registrationId(),
+            1)) {
       SbeRequestCodec requestCodec = new SbeRequestCodec();
       SbeResponseCodec responseCodec = new SbeResponseCodec();
       SleepingIdleStrategy idle = new SleepingIdleStrategy();

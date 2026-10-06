@@ -243,16 +243,21 @@ class AeronEngineAgentTest {
   }
 
   @Test
-  void aClosedReplyPublicationFailsInsteadOfRetrying(@TempDir Path tempDir) throws Exception {
+  void aRemovedReplyPublicationKeepsTheOriginalDeadline(@TempDir Path tempDir) throws Exception {
     try (TestServer server = new TestServer(tempDir)) {
       CommandRequest request = new CommandRequest(new UUID(0L, 1L), new CancelOrder(7L));
       server.send(request);
       server.awaitProcessed(1);
       server.replies.close();
 
+      // Aeron no longer returns a removed publication. An absent route must still time out.
+      server.clock.advance(TimeUnit.SECONDS.toNanos(4));
+      assertEquals(0, server.agent.doWork());
+      server.clock.advance(TimeUnit.SECONDS.toNanos(1));
+
       IllegalStateException failure = assertThrows(IllegalStateException.class, server.agent::doWork);
 
-      assertEquals("Publication is closed", failure.getMessage());
+      assertTrue(failure.getMessage().contains("Timed out sending reply"), failure.getMessage());
       assertEquals(List.of(request), server.processor.processed);
       assertEquals(List.of(request), server.log.accepted);
       assertTrue(server.errors.isEmpty(), server.errors::toString);
@@ -591,6 +596,7 @@ class AeronEngineAgentTest {
     private final Publication replies;
     private final Publication commands;
     private final AeronEngineAgent agent;
+    private final ResponsePublicationRegistry responsePublications;
 
     TestServer(Path tempDir) throws IOException {
       this(tempDir, 256);
@@ -612,12 +618,26 @@ class AeronEngineAgentTest {
       aeron = Aeron
           .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
       requests = aeron.addSubscription("aeron:ipc", 1);
-      replies = aeron.addPublication("aeron:ipc", 2);
+      responsePublications = new ResponsePublicationRegistry(aeron);
+      // These ordering/timeout tests deliberately connect a plain reply subscriber later.
+      // AeronEngineRoutingTest exercises the associated response subscriptions used by real clients.
       commands = aeron.addPublication("aeron:ipc", 1);
       agent = logWindow == null
-          ? new AeronEngineAgent(requests, replies, processor, log, false, clock, timings)
-          : new AeronEngineAgent(requests, replies, processor, log, false, clock, timings, logWindow);
+          ? new AeronEngineAgent(requests, responsePublications, processor, log, false, clock, timings)
+          : new AeronEngineAgent(requests, responsePublications, processor, log, false, clock, timings, logWindow);
       awaitConnected(commands);
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while (requests.imageCount() == 0) {
+        assertTrue(System.nanoTime() - deadline < 0, "Request image did not arrive");
+        Thread.yield();
+      }
+      agent.doWork();
+      long route = requests.imageAtIndex(0).correlationId();
+      while (responsePublications.find(route).isEmpty()) {
+        assertTrue(System.nanoTime() - deadline < 0, "Response publication was not registered");
+        Thread.yield();
+      }
+      replies = responsePublications.find(route).orElseThrow();
     }
 
     void awaitOffered() throws IOException {
@@ -687,7 +707,7 @@ class AeronEngineAgentTest {
     @Override
     public void close() {
       commands.close();
-      replies.close();
+      responsePublications.close();
       requests.close();
       aeron.close();
       driver.close();

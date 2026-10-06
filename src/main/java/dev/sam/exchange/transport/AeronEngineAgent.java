@@ -3,7 +3,9 @@ package dev.sam.exchange.transport;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -16,13 +18,14 @@ import dev.sam.exchange.persistence.RequestLog;
 import dev.sam.exchange.protocol.SbeRequestCodec;
 import dev.sam.exchange.protocol.SbeResponseCodec;
 import io.aeron.FragmentAssembler;
+import io.aeron.Image;
 import io.aeron.Publication;
 import io.aeron.Subscription;
 import io.aeron.logbuffer.FragmentHandler;
 
 public class AeronEngineAgent implements Agent {
   private final Subscription requests;
-  private final Publication replies;
+  private final ResponsePublicationRegistry responsePublications;
   private final RequestStateMachine processor;
   private final RequestLog requestLog;
   private final NanoClock clock;
@@ -32,7 +35,8 @@ public class AeronEngineAgent implements Agent {
 
   private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
   static final int DEFAULT_LOG_WINDOW = 8;
-  private CommandRequest pendingRequest;
+  private RoutedRequest pendingRequest;
+  private long pendingResponseCorrelationId;
   private long logDeadlineNanos;
   private CommandResponse pendingResponse;
   private int pendingResponseLength;
@@ -44,45 +48,49 @@ public class AeronEngineAgent implements Agent {
 
   private final SbeRequestCodec requestCodec = new SbeRequestCodec();
   private final SbeResponseCodec responseCodec = new SbeResponseCodec();
-  private final List<CommandRequest> receivedRequests = new ArrayList<>();
+  private final List<RoutedRequest> receivedRequests = new ArrayList<>();
   private final FragmentHandler handler = (buffer, offset, length, header) -> {
     CommandRequest request = requestCodec.decode(buffer, offset, length);
-    receivedRequests.add(request);
+    Image image = (Image) header.context();
+    receivedRequests.add(new RoutedRequest(request, image.correlationId()));
   };
   private final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
   private final FragmentAssembler assembler = new FragmentAssembler(handler);
   private final Deque<PendingLoggedRequest> pendingLoggedRequests = new ArrayDeque<>();
+  private final Map<Long, Image> registeredImages = new HashMap<>();
 
-  public AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor,
-      RequestLog requestLog) {
-    this(requests, replies, processor, requestLog, true);
+  public AeronEngineAgent(Subscription requests, ResponsePublicationRegistry responsePublications,
+      RequestStateMachine processor, RequestLog requestLog) {
+    this(requests, responsePublications, processor, requestLog, true);
   }
 
-  public AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor,
-      RequestLog requestLog, boolean logResults) {
-    this(requests, replies, processor, requestLog, logResults, SystemNanoClock.INSTANCE);
+  public AeronEngineAgent(Subscription requests, ResponsePublicationRegistry responsePublications,
+      RequestStateMachine processor, RequestLog requestLog, boolean logResults) {
+    this(requests, responsePublications, processor, requestLog, logResults, SystemNanoClock.INSTANCE);
   }
 
-  public AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor,
-      RequestLog requestLog, boolean logResults, int logWindow) {
-    this(requests, replies, processor, requestLog, logResults, SystemNanoClock.INSTANCE, null, logWindow);
+  public AeronEngineAgent(Subscription requests, ResponsePublicationRegistry responsePublications,
+      RequestStateMachine processor, RequestLog requestLog, boolean logResults, int logWindow) {
+    this(requests, responsePublications, processor, requestLog, logResults, SystemNanoClock.INSTANCE, null, logWindow);
   }
 
-  AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor, RequestLog requestLog,
-      boolean logResults, NanoClock clock) {
-    this(requests, replies, processor, requestLog, logResults, clock, null);
+  AeronEngineAgent(Subscription requests, ResponsePublicationRegistry responsePublications,
+      RequestStateMachine processor, RequestLog requestLog, boolean logResults, NanoClock clock) {
+    this(requests, responsePublications, processor, requestLog, logResults, clock, null);
   }
 
-  AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor, RequestLog requestLog,
-      boolean logResults, NanoClock clock, EngineStageTimings stageTimings) {
-    this(requests, replies, processor, requestLog, logResults, clock, stageTimings, DEFAULT_LOG_WINDOW);
+  AeronEngineAgent(Subscription requests, ResponsePublicationRegistry responsePublications,
+      RequestStateMachine processor, RequestLog requestLog, boolean logResults, NanoClock clock,
+      EngineStageTimings stageTimings) {
+    this(requests, responsePublications, processor, requestLog, logResults, clock, stageTimings, DEFAULT_LOG_WINDOW);
   }
 
-  AeronEngineAgent(Subscription requests, Publication replies, RequestStateMachine processor, RequestLog requestLog,
-      boolean logResults, NanoClock clock, EngineStageTimings stageTimings, int logWindow) {
+  AeronEngineAgent(Subscription requests, ResponsePublicationRegistry responsePublications,
+      RequestStateMachine processor, RequestLog requestLog, boolean logResults, NanoClock clock,
+      EngineStageTimings stageTimings, int logWindow) {
     this.logWindow = validateLogWindow(logWindow);
     this.requests = requests;
-    this.replies = replies;
+    this.responsePublications = responsePublications;
     this.processor = processor;
     this.requestLog = requestLog;
     this.logResults = logResults;
@@ -99,18 +107,22 @@ public class AeronEngineAgent implements Agent {
 
   @Override
   public int doWork() {
+    // Discover connections even before their first request, and while an earlier reply is pending.
+    int work = syncResponsePublications();
     if (pendingResponse != null) {
-      return offerPendingReply();
+      return work + offerPendingReply();
     }
 
-    int work = fillLogWindow();
+    work += fillLogWindow();
     work += processRecordedHead();
     work += offerPendingReply();
     return work;
   }
 
-  private void prepareReply(CommandRequest request) {
-    pendingResponse = processor.process(request);
+  private void prepareReply(RoutedRequest routedRequest) {
+    pendingResponse = processor.process(routedRequest.request());
+    pendingResponseCorrelationId = routedRequest.responseCorrelationId();
+
     pendingResponseLength = responseCodec.encode(pendingResponse, buffer, 0);
     preparedNanos = clock.nanoTime();
     replyDeadlineNanos = preparedNanos + TIMEOUT_NS;
@@ -132,7 +144,11 @@ public class AeronEngineAgent implements Agent {
       return 0;
     }
 
-    long offerResult = replies.offer(buffer, 0, pendingResponseLength);
+    var publication = responsePublications.find(pendingResponseCorrelationId);
+    // Registration and connection waits share the deadline set when this reply was prepared.
+    long offerResult = publication.isPresent()
+        ? publication.get().offer(buffer, 0, pendingResponseLength)
+        : Publication.NOT_CONNECTED;
 
     if (offerResult >= 0) {
       if (timedReply != null) {
@@ -184,7 +200,7 @@ public class AeronEngineAgent implements Agent {
       timedReply = head;
     }
     pendingLoggedRequests.removeFirst();
-    prepareReply(head.request());
+    prepareReply(head.routedRequest());
     return 1;
   }
 
@@ -192,12 +208,12 @@ public class AeronEngineAgent implements Agent {
     if (pendingRequest == null || pendingLoggedRequests.size() >= logWindow) {
       return 0;
     }
-    UUID requestId = pendingRequest.requestId();
-    if (processor.hasProcessed(requestId)
-        || pendingLoggedRequests.stream().anyMatch(entry -> entry.request().requestId().equals(requestId))) {
+    UUID requestId = pendingRequest.request().requestId();
+    if (processor.hasProcessed(requestId) || pendingLoggedRequests.stream()
+        .anyMatch(entry -> entry.routedRequest().request().requestId().equals(requestId))) {
       return 0;
     }
-    long position = requestLog.offer(pendingRequest);
+    long position = requestLog.offer(pendingRequest.request());
     if (position < 0) {
       checkLogDeadline("offering pending request; last offer result: " + position);
       return 0;
@@ -211,7 +227,7 @@ public class AeronEngineAgent implements Agent {
 
   private int processCachedRequest() {
     if (pendingRequest == null || pendingResponse != null || !pendingLoggedRequests.isEmpty()
-        || !processor.hasProcessed(pendingRequest.requestId())) {
+        || !processor.hasProcessed(pendingRequest.request().requestId())) {
       return 0;
     }
 
@@ -248,6 +264,41 @@ public class AeronEngineAgent implements Agent {
         break;
       }
     }
+    return work;
+  }
+
+  private int syncResponsePublications() {
+    int work = 0;
+
+    // Aeron marks an image closed when it becomes unavailable.
+    var iterator = registeredImages.entrySet().iterator();
+
+    while (iterator.hasNext()) {
+      var entry = iterator.next();
+
+      if (entry.getValue().isClosed()) {
+        responsePublications.remove(entry.getKey());
+        assembler.freeSessionBuffer(entry.getValue().sessionId());
+        iterator.remove();
+        work++;
+      }
+    }
+
+    // Get one snapshot of the subscription's current images.
+    for (Image image : requests.images()) {
+      if (image.isClosed()) {
+        continue;
+      }
+
+      long correlationId = image.correlationId();
+
+      if (!registeredImages.containsKey(correlationId)) {
+        responsePublications.register(correlationId);
+        registeredImages.put(correlationId, image);
+        work++;
+      }
+    }
+
     return work;
   }
 }

@@ -11,7 +11,6 @@ import org.agrona.concurrent.BusySpinIdleStrategy;
 import org.agrona.concurrent.SystemNanoClock;
 
 import io.aeron.Aeron;
-import io.aeron.Publication;
 import io.aeron.Subscription;
 import dev.sam.exchange.engine.OrderBook;
 import dev.sam.exchange.engine.MatchingEngine;
@@ -81,11 +80,11 @@ public class AeronEngineServer {
         ArchiveRequestLog requestLog = ArchiveRequestLog.open(runtime.archive(), stateMachine::process);
         Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectory));
         Subscription subscription = aeron.addSubscription("aeron:ipc", 1);
-        Publication replies = aeron.addPublication("aeron:ipc", 2);
+        ResponsePublicationRegistry responsePublications = new ResponsePublicationRegistry(aeron);
         // Busy spinning keeps polling for requests; budget a dedicated core for this runner.
         AgentRunner runner = new AgentRunner(new BusySpinIdleStrategy(), errorHandler, null,
-            new AeronEngineAgent(subscription, replies, stateMachine, requestLog, !quiet, SystemNanoClock.INSTANCE,
-                stageTimings, logWindow))) {
+            new AeronEngineAgent(subscription, responsePublications, stateMachine, requestLog, !quiet,
+                SystemNanoClock.INSTANCE, stageTimings, logWindow))) {
 
       AgentRunner.startOnThread(runner);
 

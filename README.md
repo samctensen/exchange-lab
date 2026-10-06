@@ -95,8 +95,10 @@ mvn spotless:apply   # Format Java sources
 3. Submit JSON orders using [the browser example and contract](docs/websocket-contract.md).
 4. Stop the gateway with **⌃C** before stopping the engine.
 
-This endpoint is local-only and has no authentication or TLS. Run one gateway launcher
-at a time for this lesson; isolated routing between gateway instances is still future work.
+This endpoint is local-only and has no authentication or TLS. Each gateway has its own
+Aeron response route; use different `--port` values when running multiple gateway instances.
+The engine still holds one pending reply at a time, so a stalled gateway can delay other clients
+and eventually stop the agent when that reply's deadline expires.
 
 Zed's class play button supplies Maven's `exec.args` when launching Java. The SBE generation
 execution pins its own schema argument so those launch arguments do not replace the schema path.
@@ -126,6 +128,36 @@ The project configures it for Maven tests and Zed terminals. Include it in the l
 `AeronEngineServer.main` owns recovery, Archive/Aeron resources, and shutdown. An Agrona `AgentRunner` calls `AeronEngineAgent.doWork()` and handles idling on the dedicated `exchange-engine` thread. Each pass fills the bounded log window and advances the recorded FIFO head through execution and reply delivery without a blocking wait loop. An unsent reply keeps its encoded bytes and original deadline; the next request waits until that reply is queued. Main closes the runner before finishing the log and closing Archive/driver. Agent failures stop the worker and are rethrown by main after cleanup, preserving their original cause. Tests cover shutdown while idle or while a reply has no subscriber, recording failures, reply timeouts, and recovery after SIGKILL.
 
 The engine runner uses `BusySpinIdleStrategy`, following [Aeron’s guidance for low-latency subscribers](https://github.com/aeron-io/aeron/wiki/Best-Practices-Guide#application-threads). It keeps polling when idle and can consume roughly one CPU core. Budget a dedicated core for this approach in production; this demo leaves CPU placement to the operating system and does not reserve or pin a core. Stop the server with **⌃C** when finished.
+
+### Run the response-channel demo in Zed
+
+Run [`AeronResponseChannelDemo.main`](src/main/java/dev/sam/exchange/transport/AeronResponseChannelDemo.java)
+with the same `--add-opens` JVM option. It starts its own embedded driver with a unique directory,
+two logical clients, and an echo server in one JVM. Each client sends one short ASCII message.
+
+```text
+Client A received: [A]
+Client B received: [B]
+Reply isolation verified: each client received only its own echo.
+```
+
+Both clients share request stream 1 and response stream 2. The routing comes from
+[Aeron response channels](https://github.com/aeron-io/aeron/wiki/Response-Channels):
+
+1. Each client creates a subscription with `control-mode=response`.
+2. Its request publication sets `response-correlation-id` to that subscription's `registrationId()`.
+3. The server sees a separate request `Image` for each client and creates a response publication
+   with `control-mode=response` and `response-correlation-id` set to that image's `correlationId()`.
+4. The server echoes each message through its source image's response publication. Aeron routes
+   it to the associated client; the client does not filter messages by their text.
+
+These IDs describe live transport connections. Our persistent request UUIDs serve a different purpose:
+recognizing retries even after reconnection or recovery. The live engine, gateway, demo client, and
+latency benchmark use this response-channel setup too. `AeronEngineAgent` registers and removes routes
+on its own thread and keeps each request's route through the log window and cached-reply path.
+Only the command request is archived; a retry after reconnect uses the new connection's route.
+The standalone demo uses five-second deadlines, sleeping waits, and automatic resource cleanup.
+It is not a latency benchmark.
 
 ### Measure order-book performance
 

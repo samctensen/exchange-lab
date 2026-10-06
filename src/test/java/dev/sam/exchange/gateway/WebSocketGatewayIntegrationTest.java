@@ -26,6 +26,7 @@ import dev.sam.exchange.transport.AeronEngineAgent;
 import dev.sam.exchange.transport.AeronRequestClient;
 import dev.sam.exchange.transport.CommandRequest;
 import dev.sam.exchange.transport.RequestStateMachine;
+import dev.sam.exchange.transport.ResponsePublicationRegistry;
 import io.aeron.Aeron;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -76,11 +77,11 @@ class WebSocketGatewayIntegrationTest {
         ArchiveRequestLog log = ArchiveRequestLog.open(runtime.archive(), state::process);
         Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(driverDirectory));
         Subscription requests = aeron.addSubscription("aeron:ipc", 1);
-        Publication replies = aeron.addPublication("aeron:ipc", 2);
-        Publication outbound = aeron.addPublication("aeron:ipc", 1);
-        Subscription inbound = aeron.addSubscription("aeron:ipc", 2);
+        ResponsePublicationRegistry responsePublications = new ResponsePublicationRegistry(aeron);
+        Subscription inbound = aeron.addSubscription("aeron:ipc?control-mode=response", 2);
+        Publication outbound = aeron.addPublication("aeron:ipc?response-correlation-id=" + inbound.registrationId(), 1);
         AgentRunner runner = new AgentRunner(new SleepingIdleStrategy(), error -> failure.compareAndSet(null, error),
-            null, new AeronEngineAgent(requests, replies, state, log, false));
+            null, new AeronEngineAgent(requests, responsePublications, state, log, false));
         EngineGateway gateway = new EngineGateway(new AeronRequestClient(outbound, inbound), 8, 4);
         WebSocketGateway server = new WebSocketGateway(gateway, 0)) {
       AgentRunner.startOnThread(runner);

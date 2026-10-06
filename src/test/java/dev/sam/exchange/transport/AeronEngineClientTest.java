@@ -102,10 +102,11 @@ class AeronEngineClientTest {
         Aeron aeron = Aeron
             .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
         Subscription commands = aeron.addSubscription("aeron:ipc", 1);
-        Publication replies = aeron.addPublication("aeron:ipc", 2)) {
+        ResponsePublicationRegistry registry = new ResponsePublicationRegistry(aeron)) {
       Process client = startClient(tempDir, clientLog);
 
       try {
+        Publication replies = awaitReplyPublication(commands, registry, client, clientLog);
         List<byte[]> messages = new ArrayList<>();
         FragmentHandler handler = captureRequests(messages);
 
@@ -174,9 +175,10 @@ class AeronEngineClientTest {
         Aeron aeron = Aeron
             .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
         Subscription commands = aeron.addSubscription("aeron:ipc", 1);
-        Publication replies = aeron.addPublication("aeron:ipc", 2)) {
+        ResponsePublicationRegistry registry = new ResponsePublicationRegistry(aeron)) {
       Process client = startClient(tempDir, clientLog);
       try {
+        Publication replies = awaitReplyPublication(commands, registry, client, clientLog);
         List<byte[]> messages = new ArrayList<>();
         FragmentHandler handler = captureRequests(messages);
         awaitCommandCount(commands, handler, messages, 1, client, clientLog);
@@ -229,9 +231,10 @@ class AeronEngineClientTest {
         Aeron aeron = Aeron
             .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
         Subscription commands = aeron.addSubscription("aeron:ipc", 1);
-        Publication replies = aeron.addPublication("aeron:ipc", 2)) {
+        ResponsePublicationRegistry registry = new ResponsePublicationRegistry(aeron)) {
       Process client = startClient(tempDir, clientLog);
       try {
+        Publication replies = awaitReplyPublication(commands, registry, client, clientLog);
         List<byte[]> messages = new ArrayList<>();
         FragmentHandler handler = captureRequests(messages);
         awaitCommandCount(commands, handler, messages, 1, client, clientLog);
@@ -268,6 +271,24 @@ class AeronEngineClientTest {
         }
       }
     }
+  }
+
+  private static Publication awaitReplyPublication(Subscription commands, ResponsePublicationRegistry registry,
+      Process client, Path clientLog) throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    SleepingIdleStrategy idle = new SleepingIdleStrategy();
+    while (commands.imageCount() == 0) {
+      assertTrue(client.isAlive(), "Client exited before connecting\n" + Files.readString(clientLog));
+      assertTrue(System.nanoTime() - deadline < 0, "Client request image did not arrive");
+      idle.idle();
+    }
+    long route = commands.imageAtIndex(0).correlationId();
+    registry.register(route);
+    while (!registry.find(route).map(Publication::isConnected).orElse(false)) {
+      assertTrue(System.nanoTime() - deadline < 0, "Client response route did not connect");
+      idle.idle();
+    }
+    return registry.find(route).orElseThrow();
   }
 
   private static void awaitServerReady(Process server, Path log) throws Exception {

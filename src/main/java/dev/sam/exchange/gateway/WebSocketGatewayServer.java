@@ -16,8 +16,8 @@ public final class WebSocketGatewayServer {
     String directory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
     Thread shutdownHook = null;
     try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(directory));
-        Publication requests = aeron.addPublication("aeron:ipc", 1);
-        Subscription replies = aeron.addSubscription("aeron:ipc", 2);
+        Subscription replies = aeron.addSubscription("aeron:ipc?control-mode=response", 2);
+        Publication requests = aeron.addPublication("aeron:ipc?response-correlation-id=" + replies.registrationId(), 1);
         EngineGateway gateway = new EngineGateway(new AeronRequestClient(requests, replies), config.queueCapacity(),
             config.maxInFlight());
         WebSocketGateway server = new WebSocketGateway(gateway, config.port())) {
