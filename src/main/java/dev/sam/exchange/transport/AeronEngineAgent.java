@@ -16,6 +16,7 @@ import dev.sam.exchange.persistence.RequestLog;
 import dev.sam.exchange.protocol.SbeRequestCodec;
 import dev.sam.exchange.protocol.SbeResponseCodec;
 import io.aeron.FragmentAssembler;
+import io.aeron.Image;
 import io.aeron.Publication;
 import io.aeron.Subscription;
 import io.aeron.logbuffer.FragmentHandler;
@@ -32,7 +33,8 @@ public class AeronEngineAgent implements Agent {
 
   private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
   static final int DEFAULT_LOG_WINDOW = 8;
-  private CommandRequest pendingRequest;
+  private RoutedRequest pendingRequest;
+  private long pendingResponseCorrelationId;
   private long logDeadlineNanos;
   private CommandResponse pendingResponse;
   private int pendingResponseLength;
@@ -44,10 +46,11 @@ public class AeronEngineAgent implements Agent {
 
   private final SbeRequestCodec requestCodec = new SbeRequestCodec();
   private final SbeResponseCodec responseCodec = new SbeResponseCodec();
-  private final List<CommandRequest> receivedRequests = new ArrayList<>();
+  private final List<RoutedRequest> receivedRequests = new ArrayList<>();
   private final FragmentHandler handler = (buffer, offset, length, header) -> {
     CommandRequest request = requestCodec.decode(buffer, offset, length);
-    receivedRequests.add(request);
+    Image image = (Image) header.context();
+    receivedRequests.add(new RoutedRequest(request, image.correlationId()));
   };
   private final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
   private final FragmentAssembler assembler = new FragmentAssembler(handler);
@@ -109,8 +112,10 @@ public class AeronEngineAgent implements Agent {
     return work;
   }
 
-  private void prepareReply(CommandRequest request) {
-    pendingResponse = processor.process(request);
+  private void prepareReply(RoutedRequest routedRequest) {
+    pendingResponse = processor.process(routedRequest.request());
+    pendingResponseCorrelationId = routedRequest.responseCorrelationId();
+
     pendingResponseLength = responseCodec.encode(pendingResponse, buffer, 0);
     preparedNanos = clock.nanoTime();
     replyDeadlineNanos = preparedNanos + TIMEOUT_NS;
@@ -184,7 +189,7 @@ public class AeronEngineAgent implements Agent {
       timedReply = head;
     }
     pendingLoggedRequests.removeFirst();
-    prepareReply(head.request());
+    prepareReply(head.routedRequest());
     return 1;
   }
 
@@ -192,12 +197,12 @@ public class AeronEngineAgent implements Agent {
     if (pendingRequest == null || pendingLoggedRequests.size() >= logWindow) {
       return 0;
     }
-    UUID requestId = pendingRequest.requestId();
-    if (processor.hasProcessed(requestId)
-        || pendingLoggedRequests.stream().anyMatch(entry -> entry.request().requestId().equals(requestId))) {
+    UUID requestId = pendingRequest.request().requestId();
+    if (processor.hasProcessed(requestId) || pendingLoggedRequests.stream()
+        .anyMatch(entry -> entry.routedRequest().request().requestId().equals(requestId))) {
       return 0;
     }
-    long position = requestLog.offer(pendingRequest);
+    long position = requestLog.offer(pendingRequest.request());
     if (position < 0) {
       checkLogDeadline("offering pending request; last offer result: " + position);
       return 0;
@@ -211,7 +216,7 @@ public class AeronEngineAgent implements Agent {
 
   private int processCachedRequest() {
     if (pendingRequest == null || pendingResponse != null || !pendingLoggedRequests.isEmpty()
-        || !processor.hasProcessed(pendingRequest.requestId())) {
+        || !processor.hasProcessed(pendingRequest.request().requestId())) {
       return 0;
     }
 
