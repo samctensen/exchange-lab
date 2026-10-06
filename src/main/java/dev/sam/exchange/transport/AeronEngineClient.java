@@ -27,8 +27,9 @@ public class AeronEngineClient {
 
     // Send requests on stream 1 and receive correlated responses on stream 2.
     try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectory));
-        Publication publication = aeron.addPublication("aeron:ipc", 1);
-        Subscription replies = aeron.addSubscription("aeron:ipc", 2)) {
+        Subscription replies = aeron.addSubscription("aeron:ipc?control-mode=response", 2);
+        Publication publication = aeron.addPublication("aeron:ipc?response-correlation-id=" + replies.registrationId(),
+            1)) {
 
       AeronRequestClient client = new AeronRequestClient(publication, replies);
 
