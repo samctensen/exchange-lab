@@ -78,8 +78,8 @@ class WebSocketGatewayIntegrationTest {
         Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(driverDirectory));
         Subscription requests = aeron.addSubscription("aeron:ipc", 1);
         ResponsePublicationRegistry responsePublications = new ResponsePublicationRegistry(aeron);
-        Publication outbound = aeron.addPublication("aeron:ipc", 1);
-        Subscription inbound = aeron.addSubscription("aeron:ipc", 2);
+        Subscription inbound = aeron.addSubscription("aeron:ipc?control-mode=response", 2);
+        Publication outbound = aeron.addPublication("aeron:ipc?response-correlation-id=" + inbound.registrationId(), 1);
         AgentRunner runner = new AgentRunner(new SleepingIdleStrategy(), error -> failure.compareAndSet(null, error),
             null, new AeronEngineAgent(requests, responsePublications, state, log, false));
         EngineGateway gateway = new EngineGateway(new AeronRequestClient(outbound, inbound), 8, 4);
