@@ -95,8 +95,10 @@ mvn spotless:apply   # Format Java sources
 3. Submit JSON orders using [the browser example and contract](docs/websocket-contract.md).
 4. Stop the gateway with **⌃C** before stopping the engine.
 
-This endpoint is local-only and has no authentication or TLS. Run one gateway launcher
-at a time for this lesson; isolated routing between gateway instances is still future work.
+This endpoint is local-only and has no authentication or TLS. Each gateway has its own
+Aeron response route; use different `--port` values when running multiple gateway instances.
+The engine still holds one pending reply at a time, so a stalled gateway can delay other clients
+and eventually stop the agent when that reply's deadline expires.
 
 Zed's class play button supplies Maven's `exec.args` when launching Java. The SBE generation
 execution pins its own schema argument so those launch arguments do not replace the schema path.
@@ -150,9 +152,12 @@ Both clients share request stream 1 and response stream 2. The routing comes fro
    it to the associated client; the client does not filter messages by their text.
 
 These IDs describe live transport connections. Our persistent request UUIDs serve a different purpose:
-recognizing retries even after reconnection or recovery. This standalone lesson introduces routing;
-the live engine/gateway still uses its existing reply stream. The demo uses five-second deadlines,
-sleeping waits, and automatic resource cleanup. It is not a latency benchmark.
+recognizing retries even after reconnection or recovery. The live engine, gateway, demo client, and
+latency benchmark use this response-channel setup too. `AeronEngineAgent` registers and removes routes
+on its own thread and keeps each request's route through the log window and cached-reply path.
+Only the command request is archived; a retry after reconnect uses the new connection's route.
+The standalone demo uses five-second deadlines, sleeping waits, and automatic resource cleanup.
+It is not a latency benchmark.
 
 ### Measure order-book performance
 
