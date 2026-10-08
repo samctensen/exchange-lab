@@ -6,6 +6,7 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -17,6 +18,7 @@ import org.agrona.concurrent.SystemNanoClock;
 import dev.sam.exchange.persistence.RequestLog;
 import dev.sam.exchange.protocol.SbeRequestCodec;
 import dev.sam.exchange.protocol.SbeResponseCodec;
+import dev.sam.exchange.transport.ReplyDeliveryStats.DropReason;
 import io.aeron.FragmentAssembler;
 import io.aeron.Image;
 import io.aeron.Publication;
@@ -32,19 +34,16 @@ public class AeronEngineAgent implements Agent {
   private final boolean logResults;
   private final EngineStageTimings stageTimings;
   private final int logWindow;
+  private final ReplyDeliveryConfig replyConfig;
+  private final long replyTimeoutNanos;
+  private final ReplyDeliveryStats replyStats;
 
   private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
+
   static final int DEFAULT_LOG_WINDOW = 8;
   private RoutedRequest pendingRequest;
-  private long pendingResponseCorrelationId;
   private long logDeadlineNanos;
-  private CommandResponse pendingResponse;
-  private int pendingResponseLength;
-  private long replyDeadlineNanos;
   private long admittedNanos;
-  private PendingLoggedRequest timedReply;
-  private long recordedNanos;
-  private long preparedNanos;
 
   private final SbeRequestCodec requestCodec = new SbeRequestCodec();
   private final SbeResponseCodec responseCodec = new SbeResponseCodec();
@@ -52,12 +51,15 @@ public class AeronEngineAgent implements Agent {
   private final FragmentHandler handler = (buffer, offset, length, header) -> {
     CommandRequest request = requestCodec.decode(buffer, offset, length);
     Image image = (Image) header.context();
+    // A new image can arrive after the duty cycle's scan and before this poll.
+    registerResponsePublication(image);
     receivedRequests.add(new RoutedRequest(request, image.correlationId()));
   };
   private final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
   private final FragmentAssembler assembler = new FragmentAssembler(handler);
   private final Deque<PendingLoggedRequest> pendingLoggedRequests = new ArrayDeque<>();
   private final Map<Long, Image> registeredImages = new HashMap<>();
+  private final Map<Long, PendingReplyQueue> replyQueues = new HashMap<>();
 
   public AeronEngineAgent(Subscription requests, ResponsePublicationRegistry responsePublications,
       RequestStateMachine processor, RequestLog requestLog) {
@@ -88,7 +90,24 @@ public class AeronEngineAgent implements Agent {
   AeronEngineAgent(Subscription requests, ResponsePublicationRegistry responsePublications,
       RequestStateMachine processor, RequestLog requestLog, boolean logResults, NanoClock clock,
       EngineStageTimings stageTimings, int logWindow) {
+    this(requests, responsePublications, processor, requestLog, logResults, clock, stageTimings, logWindow,
+        ReplyDeliveryConfig.defaults());
+  }
+
+  AeronEngineAgent(Subscription requests, ResponsePublicationRegistry responsePublications,
+      RequestStateMachine processor, RequestLog requestLog, boolean logResults, NanoClock clock,
+      EngineStageTimings stageTimings, int logWindow, ReplyDeliveryConfig replyConfig) {
+    this(requests, responsePublications, processor, requestLog, logResults, clock, stageTimings, logWindow, replyConfig,
+        null);
+  }
+
+  AeronEngineAgent(Subscription requests, ResponsePublicationRegistry responsePublications,
+      RequestStateMachine processor, RequestLog requestLog, boolean logResults, NanoClock clock,
+      EngineStageTimings stageTimings, int logWindow, ReplyDeliveryConfig replyConfig, ReplyDeliveryStats replyStats) {
     this.logWindow = validateLogWindow(logWindow);
+    this.replyConfig = Objects.requireNonNull(replyConfig, "replyConfig");
+    this.replyTimeoutNanos = replyConfig.timeout().toNanos();
+    this.replyStats = replyStats;
     this.requests = requests;
     this.responsePublications = responsePublications;
     this.processor = processor;
@@ -107,25 +126,30 @@ public class AeronEngineAgent implements Agent {
 
   @Override
   public int doWork() {
-    // Discover connections even before their first request, and while an earlier reply is pending.
     int work = syncResponsePublications();
-    if (pendingResponse != null) {
-      return work + offerPendingReply();
-    }
-
+    // Give existing replies a turn and free queue capacity before preparing another result.
+    work += offerQueuedReplies();
     work += fillLogWindow();
     work += processRecordedHead();
-    work += offerPendingReply();
     return work;
   }
 
-  private void prepareReply(RoutedRequest routedRequest) {
-    pendingResponse = processor.process(routedRequest.request());
-    pendingResponseCorrelationId = routedRequest.responseCorrelationId();
-
-    pendingResponseLength = responseCodec.encode(pendingResponse, buffer, 0);
-    preparedNanos = clock.nanoTime();
-    replyDeadlineNanos = preparedNanos + TIMEOUT_NS;
+  private void prepareReply(RoutedRequest routedRequest, PendingLoggedRequest timedRequest, long recordedNanos) {
+    // A recorded command must execute even if its connection has departed. Retries use the cached result.
+    CommandResponse response = processor.process(routedRequest.request());
+    long route = routedRequest.responseCorrelationId();
+    final boolean enqueued;
+    try {
+      enqueued = enqueueReply(route, response, timedRequest, recordedNanos);
+    } catch (IllegalArgumentException unsupportedResponse) {
+      // A valid sweep can produce more trades than the wire format can represent.
+      disableReplyRoute(route, DropReason.UNENCODABLE, 1);
+      return;
+    }
+    if (!enqueued) {
+      // Missing routes and full queues affect delivery only; never roll back or rerun the command.
+      disableReplyRoute(route, replyQueues.containsKey(route) ? DropReason.CAPACITY : DropReason.UNAVAILABLE, 1);
+    }
   }
 
   private void checkLogDeadline(String operation) {
@@ -139,49 +163,7 @@ public class AeronEngineAgent implements Agent {
     return "exchange-engine";
   }
 
-  private int offerPendingReply() {
-    if (pendingResponse == null) {
-      return 0;
-    }
-
-    var publication = responsePublications.find(pendingResponseCorrelationId);
-    // Registration and connection waits share the deadline set when this reply was prepared.
-    long offerResult = publication.isPresent()
-        ? publication.get().offer(buffer, 0, pendingResponseLength)
-        : Publication.NOT_CONNECTED;
-
-    if (offerResult >= 0) {
-      if (timedReply != null) {
-        stageTimings.record(timedReply.admittedNanos(), timedReply.offeredNanos(), recordedNanos, preparedNanos,
-            clock.nanoTime());
-        timedReply = null;
-      }
-      if (logResults) {
-        System.out.println("Result: " + pendingResponse.result());
-      }
-      pendingResponse = null;
-      return 1;
-    }
-
-    if (offerResult == Publication.CLOSED) {
-      throw new IllegalStateException("Publication is closed");
-    }
-
-    if (offerResult == Publication.MAX_POSITION_EXCEEDED) {
-      throw new IllegalStateException("Publication reached its maximum position");
-    }
-
-    if (clock.nanoTime() - replyDeadlineNanos >= 0) {
-      throw new IllegalStateException("Timed out sending reply; last offer result: " + offerResult);
-    }
-
-    return 0;
-  }
-
   private int processRecordedHead() {
-    if (pendingResponse != null) {
-      return 0;
-    }
     PendingLoggedRequest head = pendingLoggedRequests.peek();
     if (head == null) {
       return 0;
@@ -194,13 +176,10 @@ public class AeronEngineAgent implements Agent {
       }
       return 0;
     }
-    if (stageTimings != null) {
-      // This includes FIFO delay and when the agent observes progress, not just Archive disk work.
-      recordedNanos = clock.nanoTime();
-      timedReply = head;
-    }
+    // This includes FIFO delay and when the agent observes progress, not just Archive disk work.
+    long recordedNanos = stageTimings == null ? 0 : clock.nanoTime();
     pendingLoggedRequests.removeFirst();
-    prepareReply(head.routedRequest());
+    prepareReply(head.routedRequest(), stageTimings == null ? null : head, recordedNanos);
     return 1;
   }
 
@@ -226,20 +205,17 @@ public class AeronEngineAgent implements Agent {
   }
 
   private int processCachedRequest() {
-    if (pendingRequest == null || pendingResponse != null || !pendingLoggedRequests.isEmpty()
+    if (pendingRequest == null || !pendingLoggedRequests.isEmpty()
         || !processor.hasProcessed(pendingRequest.request().requestId())) {
       return 0;
     }
 
-    prepareReply(pendingRequest);
+    prepareReply(pendingRequest, null, 0);
     pendingRequest = null;
     return 1;
   }
 
   private int fillLogWindow() {
-    if (this.pendingResponse != null) {
-      return 0;
-    }
     int work = 0;
     while (pendingLoggedRequests.size() < logWindow) {
       if (pendingRequest == null) {
@@ -277,6 +253,10 @@ public class AeronEngineAgent implements Agent {
       var entry = iterator.next();
 
       if (entry.getValue().isClosed()) {
+        PendingReplyQueue removed = replyQueues.remove(entry.getKey());
+        if (removed != null) {
+          recordDropped(DropReason.DISCONNECTED, removed.size());
+        }
         responsePublications.remove(entry.getKey());
         assembler.freeSessionBuffer(entry.getValue().sessionId());
         iterator.remove();
@@ -286,19 +266,109 @@ public class AeronEngineAgent implements Agent {
 
     // Get one snapshot of the subscription's current images.
     for (Image image : requests.images()) {
-      if (image.isClosed()) {
-        continue;
-      }
-
-      long correlationId = image.correlationId();
-
-      if (!registeredImages.containsKey(correlationId)) {
-        responsePublications.register(correlationId);
-        registeredImages.put(correlationId, image);
-        work++;
-      }
+      work += registerResponsePublication(image);
     }
 
     return work;
+  }
+
+  private int registerResponsePublication(Image image) {
+    long correlationId = image.correlationId();
+    if (image.isClosed() || registeredImages.containsKey(correlationId)) {
+      return 0;
+    }
+    responsePublications.register(correlationId);
+    registeredImages.put(correlationId, image);
+    replyQueues.put(correlationId, new PendingReplyQueue(replyConfig.maxReplies(), replyConfig.maxBytes()));
+    return 1;
+  }
+
+  private boolean enqueueReply(long correlationId, CommandResponse response, PendingLoggedRequest timedRequest,
+      long recordedNanos) {
+    var queue = replyQueues.get(correlationId);
+    if (queue == null) {
+      return false;
+    }
+    int encodedLength = responseCodec.encodedLength(response);
+    long preparedNanos = clock.nanoTime();
+    PendingReply reply = new PendingReply(response, preparedNanos + replyTimeoutNanos, timedRequest, recordedNanos,
+        preparedNanos);
+    return queue.offer(reply, encodedLength);
+  }
+
+  private int offerQueuedReplies() {
+    int work = 0;
+    var iterator = replyQueues.entrySet().iterator();
+
+    while (iterator.hasNext()) {
+      var entry = iterator.next();
+      PendingReplyQueue queue = entry.getValue();
+      PendingReply reply = queue.peek();
+      if (reply == null) {
+        continue;
+      }
+
+      // Registration and connection waits use the original deadline too.
+      if (clock.nanoTime() - reply.deadlineNanos() >= 0) {
+        recordDropped(DropReason.EXPIRED, queue.size());
+        responsePublications.remove(entry.getKey());
+        iterator.remove();
+        // Keep registeredImages: this connection stays disabled until its request image closes.
+        work++;
+        continue;
+      }
+
+      var publication = responsePublications.find(entry.getKey());
+      if (publication.isEmpty()) {
+        continue;
+      }
+
+      int length = responseCodec.encodedLength(reply.response());
+      if (length > publication.get().maxMessageLength()) {
+        recordDropped(DropReason.UNENCODABLE, queue.size());
+        responsePublications.remove(entry.getKey());
+        iterator.remove();
+        work++;
+        continue;
+      }
+      // Each queue holds response objects; another route may have overwritten the shared buffer.
+      responseCodec.encode(reply.response(), buffer, 0);
+      long offerResult = publication.get().offer(buffer, 0, length);
+      if (offerResult >= 0) {
+        queue.poll();
+        if (replyStats != null) {
+          replyStats.sent();
+        }
+        PendingLoggedRequest timedRequest = reply.timedRequest();
+        if (stageTimings != null && timedRequest != null) {
+          stageTimings.record(timedRequest.admittedNanos(), timedRequest.offeredNanos(), reply.recordedNanos(),
+              reply.preparedNanos(), clock.nanoTime());
+        }
+        if (logResults) {
+          System.out.println("Result: " + reply.response().result());
+        }
+        work++;
+      } else if (offerResult == Publication.CLOSED || offerResult == Publication.MAX_POSITION_EXCEEDED) {
+        recordDropped(DropReason.UNAVAILABLE, queue.size());
+        responsePublications.remove(entry.getKey());
+        iterator.remove();
+        work++;
+      }
+      // Try only one head per route. A retryable failure leaves it queued while other routes get a turn.
+    }
+
+    return work;
+  }
+
+  private void recordDropped(DropReason reason, int count) {
+    if (replyStats != null) {
+      replyStats.dropped(reason, count);
+    }
+  }
+
+  private void disableReplyRoute(long route, DropReason reason, int additionalReplies) {
+    PendingReplyQueue queue = replyQueues.remove(route);
+    recordDropped(reason, additionalReplies + (queue == null ? 0 : queue.size()));
+    responsePublications.remove(route);
   }
 }

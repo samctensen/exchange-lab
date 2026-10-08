@@ -10,6 +10,11 @@ public record ClientConfig(Duration timeout, int maxAttempts) {
     if (timeout.isZero() || timeout.isNegative()) {
       throw new IllegalArgumentException("timeout must be positive");
     }
+    try {
+      timeout.toNanos();
+    } catch (ArithmeticException error) {
+      throw new IllegalArgumentException("timeout must be representable in nanoseconds", error);
+    }
     // Reject maxAttempts below 1.
     if (maxAttempts < 1) {
       throw new IllegalArgumentException("maxAttempts must be positive");

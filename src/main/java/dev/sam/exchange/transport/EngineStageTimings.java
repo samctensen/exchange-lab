@@ -5,7 +5,7 @@ import java.util.Locale;
 
 /** Bounded diagnostic samples. Written by the engine agent; summarize only after it stops. */
 final class EngineStageTimings {
-  private static final String[] STAGES = {"Log offer", "Recording observation", "Process and encode", "Reply offer",
+  private static final String[] STAGES = {"Log offer", "Recording observation", "Process and size", "Reply offer",
       "Server total"};
   private final int warmupCount;
   private final int sampleLimit;

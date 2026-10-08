@@ -76,7 +76,7 @@ class AeronEngineAgentTest {
         String report = timings.summarize();
         assertTrue(report.contains("Log offer: mean=20.000"), report);
         assertTrue(report.contains("Recording observation: mean=30.000"), report);
-        assertTrue(report.contains("Process and encode: mean=40.000"), report);
+        assertTrue(report.contains("Process and size: mean=40.000"), report);
         assertTrue(report.contains("Reply offer: mean=50.000"), report);
         assertTrue(report.contains("Server total: mean=140.000"), report);
 
@@ -115,7 +115,7 @@ class AeronEngineAgentTest {
   }
 
   @Test
-  void retainsPendingReplyWithoutApplyingQueuedRequestsOrAdmittingMore(@TempDir Path tempDir) throws Exception {
+  void retainsRepliesWhileApplyingRecordedCommandsAndAdmittingMore(@TempDir Path tempDir) throws Exception {
     try (TestServer server = new TestServer(tempDir)) {
       assertEquals(0, server.agent.doWork(), "An idle pass must report no work");
       PlaceOrder bid = new PlaceOrder(1L, Side.BID, 100L, 10L);
@@ -128,22 +128,24 @@ class AeronEngineAgentTest {
       server.awaitAccepted(2);
       server.log.recordedPosition = 128;
 
-      // There is no reply subscriber yet. Processing must return with the first response pending.
+      // There is no reply subscriber yet. Recorded commands still run and their replies queue in order.
       assertTimeout(Duration.ofSeconds(1), () -> server.awaitProcessed(1));
       server.send(third);
       assertTimeout(Duration.ofSeconds(1), () -> {
-        for (int i = 0; i < 20; i++) {
-          assertEquals(0, server.agent.doWork(), "An unsuccessful offer makes no progress");
-        }
+        server.awaitAccepted(3);
+        server.awaitProcessed(2);
       });
-      assertEquals(List.of(first), server.processor.processed);
-      assertEquals(List.of(first, second), server.log.accepted);
-      assertEquals(List.of(new OrderSnapshot(bid, 10L)), server.book.snapshot());
+      assertEquals(List.of(first, second), server.processor.processed);
+      assertEquals(List.of(first, second, third), server.log.accepted);
+      assertEquals(List.of(new OrderSnapshot(bid, 6L)), server.book.snapshot());
+      assertEquals(0, server.agent.doWork(), "The third command still waits for recording");
+      server.log.recordedPosition = 192;
+      server.awaitProcessed(3);
+      assertEquals(List.of(), server.book.snapshot());
 
-      // Connecting later must release the original response, then let the queued request run.
+      // Connecting later releases all original results, even though the book has changed since then.
       try (Subscription responses = server.aeron.addSubscription("aeron:ipc", 2)) {
         awaitConnected(server.replies);
-        server.log.recordImmediately = true;
         assertEquals(
             List.of(new CommandResponse(first.requestId(), new PlaceResult(1L, List.of(), 10L)),
                 new CommandResponse(second.requestId(), new PlaceResult(2L, List.of(new Trade(2L, 1L, 100L, 4L)), 0L)),
@@ -216,25 +218,19 @@ class AeronEngineAgentTest {
   }
 
   @Test
-  void repeatedOffersKeepTheOriginalFiveSecondDeadline(@TempDir Path tempDir) throws Exception {
+  void repeatedOffersExpireOnlyTheirRouteAtTheOriginalFiveSecondDeadline(@TempDir Path tempDir) throws Exception {
     try (TestServer server = new TestServer(tempDir)) {
       CommandRequest request = new CommandRequest(new UUID(0L, 1L), new CancelOrder(7L));
       server.send(request);
       server.awaitProcessed(1);
-      server.clock.advance(TimeUnit.SECONDS.toNanos(5));
-      long started = System.nanoTime();
-      long testDeadline = started + TimeUnit.SECONDS.toNanos(7);
-      SleepingIdleStrategy idle = new SleepingIdleStrategy();
-
-      IllegalStateException failure = assertThrows(IllegalStateException.class, () -> {
-        while (true) {
-          assertEquals(0, server.agent.doWork());
-          assertTrue(System.nanoTime() - testDeadline < 0, "Reply retries kept extending the deadline");
-          idle.idle();
-        }
-      });
-
-      assertTrue(failure.getMessage().contains("Timed out sending reply"), failure.getMessage());
+      server.clock.advance(TimeUnit.SECONDS.toNanos(4));
+      for (int i = 0; i < 20; i++) {
+        assertEquals(0, server.agent.doWork());
+      }
+      server.clock.advance(TimeUnit.SECONDS.toNanos(1));
+      assertEquals(1, server.agent.doWork(), "Expiry removes the route without stopping the agent");
+      assertTrue(server.replies.isClosed());
+      assertEquals(0, server.agent.doWork());
 
       assertEquals(List.of(request), server.processor.processed);
       assertEquals(List.of(request), server.log.accepted);
@@ -255,9 +251,8 @@ class AeronEngineAgentTest {
       assertEquals(0, server.agent.doWork());
       server.clock.advance(TimeUnit.SECONDS.toNanos(1));
 
-      IllegalStateException failure = assertThrows(IllegalStateException.class, server.agent::doWork);
-
-      assertTrue(failure.getMessage().contains("Timed out sending reply"), failure.getMessage());
+      assertEquals(1, server.agent.doWork(), "Expiry discards the queued reply without stopping the agent");
+      assertEquals(0, server.agent.doWork());
       assertEquals(List.of(request), server.processor.processed);
       assertEquals(List.of(request), server.log.accepted);
       assertTrue(server.errors.isEmpty(), server.errors::toString);
