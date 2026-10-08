@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
@@ -25,6 +26,8 @@ class EngineServerConfigTest {
     assertEquals(8, config.logWindow());
     assertEquals(0, config.stageWarmup());
     assertEquals(0, config.stageSamples());
+    assertEquals(new ReplyDeliveryConfig(64, 65536, Duration.ofSeconds(5)), config.replyDelivery());
+    assertFalse(config.replyStats());
   }
 
   @Test
@@ -51,8 +54,28 @@ class EngineServerConfigTest {
     assertEquals(2_147_483_647, config.logWindow());
   }
 
+  @Test
+  void acceptsReplyPolicyOverridesAndStatistics() {
+    EngineServerConfig config = EngineServerConfig
+        .parse(new String[]{"--reply-bytes=4096", "--reply-stats", "--reply-timeout-ms=250", "--reply-capacity=2"});
+
+    assertEquals(new ReplyDeliveryConfig(2, 4096, Duration.ofMillis(250)), config.replyDelivery());
+    assertTrue(config.replyStats());
+  }
+
+  @Test
+  void acceptsLargestRepresentableReplyPolicyValues() {
+    EngineServerConfig config = EngineServerConfig.parse(new String[]{"--reply-capacity=2147483647",
+        "--reply-bytes=9223372036854775807", "--reply-timeout-ms=9223372036854"});
+
+    assertEquals(
+        new ReplyDeliveryConfig(2_147_483_647, 9_223_372_036_854_775_807L, Duration.ofMillis(9_223_372_036_854L)),
+        config.replyDelivery());
+  }
+
   @ParameterizedTest
-  @ValueSource(strings = {"--quiet", "--log-window=4", "--stage-timing=0,1"})
+  @ValueSource(strings = {"--quiet", "--log-window=4", "--stage-timing=0,1", "--reply-capacity=2", "--reply-bytes=4096",
+      "--reply-timeout-ms=250", "--reply-stats"})
   void rejectsDuplicateOptionsWithTheirNames(String option) {
     IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
         () -> EngineServerConfig.parse(new String[]{option, option}));
@@ -71,6 +94,19 @@ class EngineServerConfigTest {
   }
 
   @ParameterizedTest
+  @ValueSource(strings = {"--reply-capacity=0", "--reply-capacity=-1", "--reply-capacity=", "--reply-capacity=oops",
+      "--reply-capacity=2147483648", "--reply-bytes=0", "--reply-bytes=-1", "--reply-bytes=", "--reply-bytes=oops",
+      "--reply-bytes=9223372036854775808", "--reply-timeout-ms=0", "--reply-timeout-ms=-1", "--reply-timeout-ms=",
+      "--reply-timeout-ms=oops", "--reply-timeout-ms=9223372036855", "--reply-timeout-ms=9223372036854775808"})
+  void rejectsInvalidReplyPolicyValuesWithTheOptionName(String argument) {
+    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        () -> EngineServerConfig.parse(new String[]{argument}));
+
+    assertTrue(error.getMessage().contains(argument.split("=", 2)[0]), error::getMessage);
+    assertFalse(error.getMessage().contains("Unknown argument"), error::getMessage);
+  }
+
+  @ParameterizedTest
   @ValueSource(strings = {"", "1", "1,", ",1", "1,2,3", "oops,2", "0,oops", "-1,2", "0,0", "0,-1", "0,1000001",
       "2147483648,1", "0,2147483648"})
   void rejectsInvalidTimingCountsWithTheOptionName(String counts) {
@@ -81,7 +117,8 @@ class EngineServerConfigTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"--unknown", "--quiet=true", "--log-window", "--stage-timing"})
+  @ValueSource(strings = {"--unknown", "--quiet=true", "--log-window", "--stage-timing", "--reply-capacity",
+      "--reply-bytes", "--reply-timeout-ms", "--reply-stats=true"})
   void identifiesUnsupportedArgumentsAndShowsUsage(String argument) {
     IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
         () -> EngineServerConfig.parse(new String[]{argument}));
@@ -116,8 +153,15 @@ class EngineServerConfigTest {
       assertTrue(help.contains("--log-window=count"), help);
       assertTrue(help.contains("--stage-timing=warmupCount,sampleCount"), help);
       assertTrue(help.contains("--help"), help);
+      assertTrue(help.contains("--reply-capacity=count"), help);
+      assertTrue(help.contains("--reply-bytes=count"), help);
+      assertTrue(help.contains("--reply-timeout-ms=milliseconds"), help);
+      assertTrue(help.contains("--reply-stats"), help);
       assertTrue(help.contains("data/archive"), help);
       assertTrue(help.contains("default: 8"), help);
+      assertTrue(help.contains("default: 64"), help);
+      assertTrue(help.contains("default: 65536"), help);
+      assertTrue(help.contains("default: 5000"), help);
       assertTrue(help.contains("disabled"), help);
       assertFalse(Files.exists(tempDir.resolve("data")));
       assertFalse(Files.exists(tempDir.resolve("exchange-lab-aeron")));
@@ -136,23 +180,24 @@ class EngineServerConfigTest {
     assertThrows(IllegalArgumentException.class, () -> AeronEngineServer.main(new String[]{other, "--help"}));
   }
 
-  @Test
+  @ParameterizedTest
+  @ValueSource(strings = {"--unknown", "--reply-capacity=0", "--reply-bytes=0", "--reply-timeout-ms=9223372036855"})
   @Timeout(10)
-  void rejectsLaterInvalidArgumentBeforeAllocatingTimingBuffersOrCreatingResources(@TempDir Path tempDir)
-      throws Exception {
+  void rejectsLaterInvalidArgumentBeforeAllocatingTimingBuffersOrCreatingResources(String argument,
+      @TempDir Path tempDir) throws Exception {
     Path archive = tempDir.resolve("archive");
     Path output = tempDir.resolve("startup.log");
     String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
     // Timing buffers for a million samples exceed this heap. Argument rejection must happen first.
     Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-Xmx16m",
-        "-cp", classpath, AeronEngineServer.class.getName(), archive.toString(), "--stage-timing=0,1000000",
-        "--unknown").redirectErrorStream(true).redirectOutput(output.toFile()).start();
+        "-cp", classpath, AeronEngineServer.class.getName(), archive.toString(), "--stage-timing=0,1000000", argument)
+        .redirectErrorStream(true).redirectOutput(output.toFile()).start();
     try {
       assertTrue(server.waitFor(5, TimeUnit.SECONDS), "Invalid arguments must exit without starting the server");
       String error = Files.readString(output);
       assertTrue(server.exitValue() != 0, error);
       assertTrue(error.contains("IllegalArgumentException"), error);
-      assertTrue(error.contains("--unknown"), error);
+      assertTrue(error.contains(argument.split("=", 2)[0]), error);
       assertFalse(Files.exists(archive));
     } finally {
       if (server.isAlive()) {

@@ -27,6 +27,7 @@ public class AeronEngineServer {
     EngineStageTimings stageTimings = config.stageSamples() == 0
         ? null
         : new EngineStageTimings(config.stageWarmup(), config.stageSamples());
+    ReplyDeliveryStats replyStats = config.replyStats() ? new ReplyDeliveryStats() : null;
 
     AtomicBoolean shutdownRequested = new AtomicBoolean(false);
     AtomicReference<Throwable> agentFailure = new AtomicReference<>();
@@ -66,7 +67,7 @@ public class AeronEngineServer {
         // Busy spinning keeps polling for requests; budget a dedicated core for this runner.
         AgentRunner runner = new AgentRunner(new BusySpinIdleStrategy(), errorHandler, null,
             new AeronEngineAgent(subscription, responsePublications, stateMachine, requestLog, !config.quiet(),
-                SystemNanoClock.INSTANCE, stageTimings, config.logWindow()))) {
+                SystemNanoClock.INSTANCE, stageTimings, config.logWindow(), config.replyDelivery(), replyStats))) {
 
       AgentRunner.startOnThread(runner);
 
@@ -74,6 +75,8 @@ public class AeronEngineServer {
       System.out.println("Archive: " + archiveDirectory);
       System.out.println("Request recording: " + requestLog.recordingId());
       System.out.println("Engine log window: " + config.logWindow());
+      System.out.println("Reply policy: capacity=" + config.replyDelivery().maxReplies() + ", bytes="
+          + config.replyDelivery().maxBytes() + ", timeout-ms=" + config.replyDelivery().timeout().toMillis());
       System.out.println("Waiting for requests.");
 
       // The runner processes requests. Main waits here to keep resources open.
@@ -84,6 +87,9 @@ public class AeronEngineServer {
       // Resource closure has stopped the writer before main reads its samples.
       if (stageTimings != null) {
         System.out.print(stageTimings.summarize());
+      }
+      if (replyStats != null) {
+        System.out.print(replyStats.summarize());
       }
     }
     Throwable failure = agentFailure.get();

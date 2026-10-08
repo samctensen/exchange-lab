@@ -341,15 +341,15 @@ class AeronEngineServerTest {
 
   @Test
   @Timeout(30)
-  void keepsServingAfterReplyTimeoutAndReturnsCachedResultOnReconnect(@TempDir Path tempDir) throws Exception {
+  void configuredReplyTimeoutExpiresUnreadRepliesAndReportsStatsAtShutdown(@TempDir Path tempDir) throws Exception {
     Path archiveDirectory = tempDir.resolve("archive");
     Path serverLog = tempDir.resolve("server.log");
     Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
     String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
     Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
         "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Djava.io.tmpdir=" + tempDir, "-cp", classpath,
-        AeronEngineServer.class.getName(), archiveDirectory.toString()).redirectErrorStream(true)
-        .redirectOutput(serverLog.toFile()).start();
+        AeronEngineServer.class.getName(), archiveDirectory.toString(), "--reply-capacity=2", "--reply-bytes=4096",
+        "--reply-timeout-ms=500", "--reply-stats").redirectErrorStream(true).redirectOutput(serverLog.toFile()).start();
     CommandRequest bid = new CommandRequest(new UUID(0L, 1L), new PlaceOrder(1L, Side.BID, 100L, 10L));
     CommandRequest firstFill = new CommandRequest(new UUID(0L, 2L), new PlaceOrder(2L, Side.ASK, 99L, 4L));
     CommandRequest finalFill = new CommandRequest(new UUID(0L, 3L), new PlaceOrder(3L, Side.ASK, 100L, 6L));
@@ -357,7 +357,6 @@ class AeronEngineServerTest {
 
     try {
       awaitServerOutput(server, serverLog, "Server ready:");
-      long positionBeforeRetry;
       try (
           Aeron aeron = Aeron
               .connect(new Aeron.Context().aeronDirectoryName(driverDirectory.toString()).errorHandler(errors::add));
@@ -380,29 +379,32 @@ class AeronEngineServerTest {
             exchangeRequests(server, serverLog, driverDirectory, List.of(firstFill), false, false));
 
         // This fill proves the bid was processed and its reply deadline had already started.
-        // Waiting five seconds from that observation crosses the actual delivery deadline.
-        assertFalse(server.waitFor(5, TimeUnit.SECONDS),
+        // Waiting the configured 500 ms from that observation crosses the actual delivery deadline.
+        assertFalse(server.waitFor(500, TimeUnit.MILLISECONDS),
             "An undeliverable reply stopped the server\n" + Files.readString(serverLog));
         assertFalse(Files.readString(serverLog).contains("Result: PlaceResult[orderId=1,"),
             "An undelivered response must not be logged as sent");
 
         assertEquals(List.of(new PlaceResult(3L, List.of(new Trade(3L, 1L, 100L, 6L)), 0L)),
             exchangeRequests(server, serverLog, driverDirectory, List.of(finalFill), false, false));
-        positionBeforeRetry = archive.getRecordingPosition(recordingId);
+        long positionBeforeRetry = archive.getRecordingPosition(recordingId);
         assertTrue(errors.isEmpty(), errors::toString);
-      }
 
-      try (AeronArchive archive = ArchiveTestSupport.connect(driverDirectory)) {
         // A new connection gets the original ten-lot result even though the bid is now fully filled.
         assertEquals(List.of(new PlaceResult(1L, List.of(), 10L)),
             exchangeRequests(server, serverLog, driverDirectory, List.of(bid), false, false));
         assertEquals(positionBeforeRetry, archive.getRecordingPosition(ArchiveTestSupport.recordingId(archive)),
             "Retrying a request whose reply timed out must not append it again");
+        // Keep the unread route connected through shutdown so it cannot be counted as disconnected.
+        server.destroy();
+        assertTrue(server.waitFor(3, TimeUnit.SECONDS), "Server did not stop after the shutdown request");
       }
-
-      server.destroy();
-      assertTrue(server.waitFor(3, TimeUnit.SECONDS), "Server did not stop after the shutdown request");
       String output = Files.readString(serverLog);
+      assertTrue(output.contains("Reply policy: capacity=2, bytes=4096, timeout-ms=500"), output);
+      assertTrue(
+          output.contains(
+              "Reply delivery: offered=3, expired=1, capacity=0, disconnected=0, unavailable=0, " + "unencodable=0"),
+          output);
       assertFalse(output.contains("Exception"), output);
       assertFalse(output.contains("Server shutdown exceeded"), output);
       assertFalse(Files.exists(driverDirectory), "Shutdown did not remove the Aeron driver directory\n" + output);
@@ -497,6 +499,7 @@ class AeronEngineServerTest {
       assertFalse(output.contains("Server shutdown exceeded"), output);
       assertFalse(output.contains("Exception"), output);
       assertFalse(Files.exists(driverDirectory), "Shutdown did not remove the Aeron driver directory\n" + output);
+      assertFalse(output.contains("Reply delivery:"), "Reply statistics must be opt-in\n" + output);
       return List.copyOf(results);
     } finally {
       if (server.isAlive()) {
