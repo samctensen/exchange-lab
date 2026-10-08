@@ -6,6 +6,7 @@ The exchange runs as a Java process with an embedded Aeron Media Driver and Arch
 
 Multiple local gateway instances can share the engine. Each gateway has a separate Aeron reply
 route and bounded reply queue; use a different WebSocket port for each gateway process.
+The diagram shows the default limits; the engine launcher can configure reply count, bytes, and timeout.
 
 ```mermaid
 flowchart TB
@@ -51,7 +52,7 @@ The WebSocket adapter adds bounded Netty connections and strict JSON conversion.
 - **Ordering:** the engine agent chooses one processing order across incoming client sessions. Its single `ExclusivePublication` records that order. Separate client sessions have no shared ordering guarantee by themselves. [Aeron ordering documentation](https://aeron.io/docs/aeron/aeron-channel-stream-session/)
 - **Persistence:** a successful publication offer only places bytes in Aeron's buffer. The agent waits across `doWork()` passes until Archive's recording position reaches that message's end position. File/catalog sync level 2 forces data and metadata before the engine proceeds.
 - **Execution:** `RequestStateMachine` handles retries and UUID conflicts, then delegates fresh commands to `MatchingEngine`. It caches successful results and business rejections. `OrderBook` holds the authoritative live order state.
-- **Reply delivery:** each Aeron request image identifies one client connection, usually one gateway process. `ResponsePublicationRegistry` owns that connection's response publication. `PendingReplyQueue` holds up to 64 immutable responses with a total encoded size of at most 64 KiB. Each agent pass attempts only the head of each queue, preserving that connection's reply order and giving other routes a turn even if one is blocked. These queues live on the existing engine thread; there is no new thread per gateway.
+- **Reply delivery:** each Aeron request image identifies one client connection, usually one gateway process. `ResponsePublicationRegistry` owns that connection's response publication. `PendingReplyQueue` holds up to 64 immutable responses with a total encoded size of at most 64 KiB by default. `ReplyDeliveryConfig` validates configurable count, byte, and timeout limits. SBE size calculation checks admission without serializing the response; actual encoding happens immediately before its offer. Each agent pass attempts only the head of each queue, preserving that connection's reply order and giving other routes a turn even if one is blocked. These queues live on the existing engine thread; there is no new thread per gateway.
 - **Recovery:** before opening the live request subscription, startup replays the recording into a fresh state machine, restoring the book and response cache. The server then extends the same recording. It does not send old replies during replay.
 
 Known UUIDs return their cached response or a conflict response without appending again. If the process stops after recording but before execution or reply delivery, replay applies the request; retrying the same UUID returns its original outcome. An unanswered request has an **unknown outcome**, not a confirmed failure.
@@ -83,7 +84,7 @@ rule, and single writer remain the same.
 
 ### When a reply cannot be delivered
 
-- Each queued reply has a fixed five-second deadline starting when its result is prepared.
+- Each queued reply has a fixed deadline starting when its result is prepared (five seconds by default).
   Repeated offers and asynchronous publication registration do not reset it.
 - A full queue, an expired reply, or a terminal publication failure disables that connection's
   reply route and discards its queued deliveries. Other routes continue. The route stays
@@ -94,10 +95,17 @@ rule, and single writer remain the same.
   fresh Aeron connection, its retry can receive the cached result without another log entry.
   The current gateway does not automatically rebuild a disabled Aeron connection; restart it
   to establish a fresh route. Reopening only a browser WebSocket does not replace that route.
-- A single result above 64 KiB cannot fit even in an empty queue. Retrying that result cannot
-  solve its size; supporting it requires a future size-limit or chunking design. The byte budget
-  measures encoded payload, not total Java heap use. These per-connection bounds also do not cap
-  the total number of Aeron connections or the existing response cache.
+- A single result above the configured byte budget cannot fit even in an empty queue. Raising
+  `--reply-bytes` can accommodate larger results within the Aeron publication and SBE limits.
+  Results exceeding the publication's maximum message length or the schema's 65,534-trade limit
+  disable only their reply route, preserving execution and the cache. Retrying cannot solve those
+  limits; larger results require a future chunking design. The byte budget measures encoded payload,
+  not total Java heap use. These per-connection bounds also do not cap the total number of Aeron
+  connections or the existing response cache.
+
+`--reply-stats` prints counts of successful offers and discarded replies by cause after the engine
+stops. An offer is not a receipt acknowledgment; a cached retry counts as another delivery attempt.
+See [the server options and diagnostic meanings](../README.md#reply-limits-and-diagnostics).
 
 Recording failures remain fatal: the engine cannot safely continue a history whose recording
 has failed. A slow reply consumer is a delivery problem and no longer stops the whole engine.

@@ -99,11 +99,13 @@ This endpoint is local-only and has no authentication or TLS. Each gateway has i
 Aeron response route; use different `--port` values when running multiple gateway instances.
 The engine queues replies separately for each Aeron client connection. A stalled gateway does
 not hold up other gateways' replies or recorded command execution. Each reply queue allows up to
-64 responses and 64 KiB of encoded payload, with a fixed five-second deadline per response.
+64 responses and 64 KiB of encoded payload by default, with a fixed five-second deadline per response.
 Overflow or expiry disables that connection's reply route; it does not undo accepted commands.
 Reconnect and retry the same UUID and command to recover the original result.
-An individual result larger than 64 KiB also exceeds this queue limit; reconnecting cannot make
-that result fit. Larger results require a future size-limit or chunking design.
+An individual result larger than the configured byte budget also exceeds this queue limit.
+Replies must additionally fit Aeron's publication message limit and SBE's trade-group limit.
+Exceeding either disables that reply route without stopping other clients or undoing the order.
+Reconnecting alone cannot make an oversized result fit; see the limits below.
 
 Zed's class play button supplies Maven's `exec.args` when launching Java. The SBE generation
 execution pins its own schema argument so those launch arguments do not replace the schema path.
@@ -131,6 +133,43 @@ Both processes must use the same `java.io.tmpdir`, where the server creates `exc
 The project configures it for Maven tests and Zed terminals. Include it in the launch configuration when running elsewhere. Use matching client/server versions: IPC stream 1 carries SBE `PlaceOrderRequest` and `CancelOrderRequest` messages; stream 2 carries SBE `PlaceOrderResponse`, `CancelOrderResponse`, and `RejectOrderResponse` messages. Both live streams use the binary protocol instead of the old text wrappers.
 
 `AeronEngineServer.main` owns recovery, Archive/Aeron resources, and shutdown. An Agrona `AgentRunner` calls `AeronEngineAgent.doWork()` and handles idling on the dedicated `exchange-engine` thread. Each pass discovers connections, tries one queued reply per connection, fills the bounded log window, and applies at most one recorded FIFO head. Replies retain immutable results and their original deadlines; the agent encodes each response into its shared buffer immediately before offering it. Matching remains single-threaded, while reply delivery progresses independently for each connection. Main closes the runner before finishing the log and closing Archive/driver. Recording failures stop the worker and are rethrown by main after cleanup, preserving their original cause. Reply expiry closes only its route. Tests cover shutdown, slow-client isolation, queue overflow, reconnect retries, recording failures, and recovery after SIGKILL. See [the architecture walkthrough](docs/architecture.md#follow-one-order) for the complete path.
+
+#### Reply limits and diagnostics
+
+Add these to the engine server's program arguments as needed:
+
+| Option | Default | Controls |
+| --- | --- | --- |
+| `--reply-capacity=64` | 64 | Maximum queued replies per Aeron connection |
+| `--reply-bytes=65536` | 65,536 | Total encoded bytes allowed in that connection's reply queue |
+| `--reply-timeout-ms=5000` | 5,000 ms | Deadline from result preparation to successful publication offer |
+| `--reply-stats` | Disabled | Print delivery counters after shutdown |
+| `--help` | — | Print all server options and exit; use by itself |
+
+For example: `data/demo-archive --quiet --reply-capacity=128 --reply-bytes=262144 --reply-timeout-ms=10000 --reply-stats`.
+Count/byte limits and timeouts must be positive; timeouts must fit in a signed 64-bit nanosecond value.
+The server validates the complete argument list before allocating timing buffers or opening resources.
+These controls are independent of the five-second log-offer and recording deadlines.
+
+With `--reply-stats`, stop the engine with **⌃C** to see a summary such as:
+
+```text
+Reply delivery: offered=12, expired=2, capacity=3, disconnected=0, unavailable=0, unencodable=0
+```
+
+`offered` counts successful Aeron offers, including cached retries; it does not confirm client receipt
+or count unique executions. The other fields count discarded replies by cause, including the rest
+of a queue when its route is disabled. `capacity` means the count or byte budget was exceeded;
+`unavailable` includes terminal publication failures and requests whose route has already gone away;
+`unencodable` means the SBE or publication message limit was exceeded. Replies still queued when the
+server stops are not counted as discarded. Stats are optional, written on the engine thread, and
+read only after that thread stops.
+
+Increasing the byte budget can admit larger replies only within the publication and schema limits.
+The current SBE response allows at most 65,534 trades (2,097,132 encoded bytes), and the publication's
+maximum message length can be smaller. Splitting larger results across messages remains future work.
+After a route is disabled, restart the affected gateway and retry the same UUID and command to recover
+a deliverable cached outcome. A browser reconnect alone does not recreate the gateway's Aeron route.
 
 The engine runner uses `BusySpinIdleStrategy`, following [Aeron’s guidance for low-latency subscribers](https://github.com/aeron-io/aeron/wiki/Best-Practices-Guide#application-threads). It keeps polling when idle and can consume roughly one CPU core. Budget a dedicated core for this approach in production; this demo leaves CPU placement to the operating system and does not reserve or pin a core. Stop the server with **⌃C** when finished.
 
