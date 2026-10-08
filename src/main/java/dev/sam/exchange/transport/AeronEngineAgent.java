@@ -18,6 +18,7 @@ import org.agrona.concurrent.SystemNanoClock;
 import dev.sam.exchange.persistence.RequestLog;
 import dev.sam.exchange.protocol.SbeRequestCodec;
 import dev.sam.exchange.protocol.SbeResponseCodec;
+import dev.sam.exchange.transport.ReplyDeliveryStats.DropReason;
 import io.aeron.FragmentAssembler;
 import io.aeron.Image;
 import io.aeron.Publication;
@@ -35,6 +36,7 @@ public class AeronEngineAgent implements Agent {
   private final int logWindow;
   private final ReplyDeliveryConfig replyConfig;
   private final long replyTimeoutNanos;
+  private final ReplyDeliveryStats replyStats;
 
   private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
 
@@ -95,9 +97,17 @@ public class AeronEngineAgent implements Agent {
   AeronEngineAgent(Subscription requests, ResponsePublicationRegistry responsePublications,
       RequestStateMachine processor, RequestLog requestLog, boolean logResults, NanoClock clock,
       EngineStageTimings stageTimings, int logWindow, ReplyDeliveryConfig replyConfig) {
+    this(requests, responsePublications, processor, requestLog, logResults, clock, stageTimings, logWindow, replyConfig,
+        null);
+  }
+
+  AeronEngineAgent(Subscription requests, ResponsePublicationRegistry responsePublications,
+      RequestStateMachine processor, RequestLog requestLog, boolean logResults, NanoClock clock,
+      EngineStageTimings stageTimings, int logWindow, ReplyDeliveryConfig replyConfig, ReplyDeliveryStats replyStats) {
     this.logWindow = validateLogWindow(logWindow);
     this.replyConfig = Objects.requireNonNull(replyConfig, "replyConfig");
     this.replyTimeoutNanos = replyConfig.timeout().toNanos();
+    this.replyStats = replyStats;
     this.requests = requests;
     this.responsePublications = responsePublications;
     this.processor = processor;
@@ -128,8 +138,10 @@ public class AeronEngineAgent implements Agent {
     // A recorded command must execute even if its connection has departed. Retries use the cached result.
     CommandResponse response = processor.process(routedRequest.request());
     long route = routedRequest.responseCorrelationId();
+    PendingReplyQueue queue = replyQueues.get(route);
     if (!enqueueReply(route, response, timedRequest, recordedNanos)) {
       // Missing routes and full queues affect delivery only; never roll back or rerun the command.
+      recordDropped(queue == null ? DropReason.UNAVAILABLE : DropReason.CAPACITY, queue == null ? 1 : queue.size() + 1);
       replyQueues.remove(route);
       responsePublications.remove(route);
     }
@@ -236,7 +248,10 @@ public class AeronEngineAgent implements Agent {
       var entry = iterator.next();
 
       if (entry.getValue().isClosed()) {
-        replyQueues.remove(entry.getKey());
+        PendingReplyQueue removed = replyQueues.remove(entry.getKey());
+        if (removed != null) {
+          recordDropped(DropReason.DISCONNECTED, removed.size());
+        }
         responsePublications.remove(entry.getKey());
         assembler.freeSessionBuffer(entry.getValue().sessionId());
         iterator.remove();
@@ -290,6 +305,7 @@ public class AeronEngineAgent implements Agent {
 
       // Registration and connection waits use the original deadline too.
       if (clock.nanoTime() - reply.deadlineNanos() >= 0) {
+        recordDropped(DropReason.EXPIRED, queue.size());
         responsePublications.remove(entry.getKey());
         iterator.remove();
         // Keep registeredImages: this connection stays disabled until its request image closes.
@@ -307,6 +323,9 @@ public class AeronEngineAgent implements Agent {
       long offerResult = publication.get().offer(buffer, 0, length);
       if (offerResult >= 0) {
         queue.poll();
+        if (replyStats != null) {
+          replyStats.sent();
+        }
         PendingLoggedRequest timedRequest = reply.timedRequest();
         if (stageTimings != null && timedRequest != null) {
           stageTimings.record(timedRequest.admittedNanos(), timedRequest.offeredNanos(), reply.recordedNanos(),
@@ -317,6 +336,7 @@ public class AeronEngineAgent implements Agent {
         }
         work++;
       } else if (offerResult == Publication.CLOSED || offerResult == Publication.MAX_POSITION_EXCEEDED) {
+        recordDropped(DropReason.UNAVAILABLE, queue.size());
         responsePublications.remove(entry.getKey());
         iterator.remove();
         work++;
@@ -325,5 +345,11 @@ public class AeronEngineAgent implements Agent {
     }
 
     return work;
+  }
+
+  private void recordDropped(DropReason reason, int count) {
+    if (replyStats != null) {
+      replyStats.dropped(reason, count);
+    }
   }
 }

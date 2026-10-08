@@ -51,6 +51,37 @@ class AeronQueuedReplyTest {
   private static final long DEADLINE = TimeUnit.SECONDS.toNanos(5);
   private static final UUID FILLER_ID = new UUID(0, Long.MAX_VALUE);
 
+  @Test
+  void deliveryStatsSeparateOffersFromCapacityAndExpiryDrops() {
+    try (Fixture fixture = new Fixture(new ReplyDeliveryConfig(2, 1024, Duration.ofSeconds(5)));
+        Client full = fixture.client();
+        Client expired = fixture.client();
+        Client healthy = fixture.client()) {
+      fixture.connect(full, expired, healthy);
+      fixture.backPressure(full);
+      fixture.backPressure(expired);
+      CommandRequest first = request(1, new CancelOrder(1));
+      fixture.submit(full, first);
+      fixture.submit(full, request(2, new CancelOrder(2)));
+      fixture.submit(full, request(3, new CancelOrder(3)));
+      fixture.submit(expired, request(4, new CancelOrder(4)));
+      fixture.clock.now = DEADLINE;
+      fixture.agent.doWork();
+      fixture.send(healthy, request(5, new CancelOrder(5)));
+      fixture.receive(healthy, 1);
+      assertEquals(1, fixture.stats.sentCount());
+      assertEquals(3, fixture.stats.droppedCount(ReplyDeliveryStats.DropReason.CAPACITY));
+      assertEquals(1, fixture.stats.droppedCount(ReplyDeliveryStats.DropReason.EXPIRED));
+      assertEquals(0, fixture.stats.droppedCount(ReplyDeliveryStats.DropReason.UNAVAILABLE));
+      assertTrue(fixture.stats.summarize().contains("offered=1, expired=1, capacity=3"));
+
+      fixture.send(healthy, first);
+      fixture.receive(healthy, 2);
+      assertEquals(2, fixture.stats.sentCount(), "A cached retry is another delivery, not another execution");
+      assertEquals(5, fixture.log.accepted.size());
+    }
+  }
+
   @ParameterizedTest
   @CsvSource({"2, 1024", "64, 66"})
   void configuredCapacityOrByteLimitClosesOnlyTheFullRoute(int capacity, long bytes) {
@@ -260,6 +291,7 @@ class AeronQueuedReplyTest {
       fixture.submit(a, first);
       fixture.registry.closeOnLookup = a.route;
       assertEquals(1, fixture.agent.doWork());
+      assertEquals(1, fixture.stats.droppedCount(ReplyDeliveryStats.DropReason.UNAVAILABLE));
       assertTrue(fixture.registry.find(a.route).isEmpty());
       assertEquals(0, fixture.agent.doWork());
 
@@ -268,6 +300,24 @@ class AeronQueuedReplyTest {
       fixture.receive(b, 1);
       assertEquals(List.of(new CommandResponse(healthy.requestId(), new CancelResult(2, false))), b.received);
       assertEquals(List.of(first, healthy), fixture.log.accepted);
+    }
+  }
+
+  @Test
+  void disconnectCountsQueuedRepliesWithoutUndoingTheirOrders() {
+    try (Fixture fixture = new Fixture(); Client client = fixture.client()) {
+      fixture.connect(client);
+      fixture.backPressure(client);
+      PlaceOrder bid = new PlaceOrder(1, Side.BID, 100, 10);
+      fixture.submit(client, request(1, bid));
+      client.requests.close();
+      fixture.awaitDriver(() -> fixture.requests.imageCount() == 0, "disconnecting the client");
+      fixture.agent.doWork();
+      assertEquals(1, fixture.stats.droppedCount(ReplyDeliveryStats.DropReason.DISCONNECTED));
+      assertEquals(0, fixture.stats.sentCount());
+      assertEquals(List.of(new OrderSnapshot(bid, 10)), fixture.book.snapshot());
+      assertEquals(0, fixture.agent.doWork());
+      assertEquals(1, fixture.stats.droppedCount(ReplyDeliveryStats.DropReason.DISCONNECTED));
     }
   }
 
@@ -329,6 +379,7 @@ class AeronQueuedReplyTest {
       fixture.log.recordedPosition = 64;
       fixture.await(() -> fixture.state.hasProcessed(command.requestId()),
           "applying the disconnected client's recorded command");
+      assertEquals(1, fixture.stats.droppedCount(ReplyDeliveryStats.DropReason.UNAVAILABLE));
       assertEquals(List.of(new OrderSnapshot((PlaceOrder) command.command(), 10)), fixture.book.snapshot());
 
       try (Client reconnected = fixture.client()) {
@@ -398,6 +449,7 @@ class AeronQueuedReplyTest {
     final Registry registry = new Registry(aeron);
     final Clock clock = new Clock();
     final EngineStageTimings timings = new EngineStageTimings(0, 8);
+    final ReplyDeliveryStats stats = new ReplyDeliveryStats();
     final Log log = new Log();
     final OrderBook book = new OrderBook();
     final RequestStateMachine state = new RequestStateMachine(new MatchingEngine(book));
@@ -409,7 +461,7 @@ class AeronQueuedReplyTest {
 
     Fixture(ReplyDeliveryConfig config) {
       agent = new AeronEngineAgent(requests, registry, state, log, false, clock, timings,
-          AeronEngineAgent.DEFAULT_LOG_WINDOW, config);
+          AeronEngineAgent.DEFAULT_LOG_WINDOW, config, stats);
     }
 
     Client client() {
