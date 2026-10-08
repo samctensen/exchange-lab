@@ -20,31 +20,10 @@ import dev.sam.exchange.persistence.ArchiveRequestLog;
 public class AeronEngineServer {
   public static void main(String[] args) throws IOException, InterruptedException {
 
-    String archiveArgument = null;
-    boolean quiet = false;
-    EngineStageTimings stageTimings = null;
-    Integer configuredLogWindow = null;
-    for (String arg : args) {
-      if ("--quiet".equals(arg)) {
-        quiet = true;
-      } else if (arg.startsWith("--log-window=") && configuredLogWindow == null) {
-        configuredLogWindow = AeronEngineAgent
-            .validateLogWindow(Integer.parseInt(arg.substring("--log-window=".length())));
-      } else if (arg.startsWith("--stage-timing=") && stageTimings == null) {
-        String[] counts = arg.substring("--stage-timing=".length()).split(",", -1);
-        if (counts.length != 2) {
-          throw new IllegalArgumentException("Usage: --stage-timing=warmupCount,sampleCount");
-        }
-        stageTimings = new EngineStageTimings(Integer.parseInt(counts[0]), Integer.parseInt(counts[1]));
-      } else if (archiveArgument == null && !arg.startsWith("--")) {
-        archiveArgument = arg;
-      } else {
-        throw new IllegalArgumentException(
-            "Usage: AeronEngineServer [archiveDirectory] [--quiet] [--stage-timing=warmupCount,sampleCount] [--log-window=count]");
-      }
-    }
-
-    int logWindow = configuredLogWindow == null ? AeronEngineAgent.DEFAULT_LOG_WINDOW : configuredLogWindow;
+    EngineServerConfig config = EngineServerConfig.parse(args);
+    EngineStageTimings stageTimings = config.stageSamples() == 0
+        ? null
+        : new EngineStageTimings(config.stageWarmup(), config.stageSamples());
 
     AtomicBoolean shutdownRequested = new AtomicBoolean(false);
     AtomicReference<Throwable> agentFailure = new AtomicReference<>();
@@ -68,7 +47,7 @@ public class AeronEngineServer {
       }
     }, "server-shutdown"));
 
-    Path archiveDirectory = archiveArgument != null ? Path.of(archiveArgument) : Path.of("data", "archive");
+    Path archiveDirectory = config.archiveDirectory();
     RequestStateMachine stateMachine = new RequestStateMachine(new MatchingEngine(new OrderBook()));
 
     // Both processes use this directory to connect to the same media driver.
@@ -83,15 +62,15 @@ public class AeronEngineServer {
         ResponsePublicationRegistry responsePublications = new ResponsePublicationRegistry(aeron);
         // Busy spinning keeps polling for requests; budget a dedicated core for this runner.
         AgentRunner runner = new AgentRunner(new BusySpinIdleStrategy(), errorHandler, null,
-            new AeronEngineAgent(subscription, responsePublications, stateMachine, requestLog, !quiet,
-                SystemNanoClock.INSTANCE, stageTimings, logWindow))) {
+            new AeronEngineAgent(subscription, responsePublications, stateMachine, requestLog, !config.quiet(),
+                SystemNanoClock.INSTANCE, stageTimings, config.logWindow()))) {
 
       AgentRunner.startOnThread(runner);
 
       System.out.println("Server ready: " + aeronDirectory);
       System.out.println("Archive: " + archiveDirectory);
       System.out.println("Request recording: " + requestLog.recordingId());
-      System.out.println("Engine log window: " + logWindow);
+      System.out.println("Engine log window: " + config.logWindow());
       System.out.println("Waiting for requests.");
 
       // The runner processes requests. Main waits here to keep resources open.
