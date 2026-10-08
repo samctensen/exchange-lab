@@ -284,7 +284,7 @@ public class AeronEngineAgent implements Agent {
     if (queue == null) {
       return false;
     }
-    int encodedLength = responseCodec.encode(response, buffer, 0);
+    int encodedLength = responseCodec.encodedLength(response);
     long preparedNanos = clock.nanoTime();
     PendingReply reply = new PendingReply(response, preparedNanos + replyTimeoutNanos, timedRequest, recordedNanos,
         preparedNanos);
