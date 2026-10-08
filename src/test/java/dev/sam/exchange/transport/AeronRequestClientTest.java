@@ -3,6 +3,7 @@ package dev.sam.exchange.transport;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -242,6 +243,56 @@ class AeronRequestClientTest {
 
       sendResponse(responses, new CommandResponse(request.requestId(), new CancelResult(7L, false)));
       assertEquals(new CancelResult(7L, false), result.get(2, TimeUnit.SECONDS));
+      assertTrue(errors.isEmpty(), errors::toString);
+    }
+  }
+
+  @Test
+  @Timeout(10)
+  void resumesWithRemainingBufferedResponsesAfterCallbackFailure(@TempDir Path tempDir) {
+    ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
+    try (
+        MediaDriver driver = MediaDriver
+            .launchEmbedded(new MediaDriver.Context().aeronDirectoryName(tempDir.resolve("aeron").toString())
+                .dirDeleteOnShutdown(true).errorHandler(errors::add));
+        Aeron aeron = Aeron
+            .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
+        Publication publication = aeron.addPublication("aeron:ipc", 1);
+        Subscription replies = aeron.addSubscription("aeron:ipc", 2);
+        Publication responses = aeron.addPublication("aeron:ipc", 2)) {
+      awaitConnected(responses);
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+      SleepingIdleStrategy idle = new SleepingIdleStrategy();
+      while (!replies.isConnected()) {
+        assertTrue(System.nanoTime() - deadline < 0, "Reply subscription did not connect");
+        idle.idle();
+      }
+      AeronRequestClient client = new AeronRequestClient(publication, replies);
+      CommandResponse first = new CommandResponse(new UUID(0L, 1L), new CancelResult(1L, true));
+      CommandResponse second = new CommandResponse(new UUID(0L, 2L), new CancelResult(2L, false));
+      CommandResponse third = new CommandResponse(new UUID(0L, 3L), new CancelResult(3L, true));
+      CommandResponse fourth = new CommandResponse(new UUID(0L, 4L), new CancelResult(4L, false));
+      for (CommandResponse response : List.of(first, second, third, fourth)) {
+        sendResponse(responses, response);
+      }
+      List<CommandResponse> dispatched = new ArrayList<>();
+      IllegalStateException callbackFailure = new IllegalStateException("Response callback failed");
+
+      IllegalStateException failure = assertThrows(IllegalStateException.class, () -> client.pollResponses(response -> {
+        dispatched.add(response);
+        if (response.equals(second)) {
+          throw callbackFailure;
+        }
+      }, 10));
+
+      assertSame(callbackFailure, failure);
+      assertEquals(List.of(first, second), dispatched);
+      List<CommandResponse> remaining = new ArrayList<>();
+      // A zero fragment limit drains only responses already buffered before the callback threw.
+      assertEquals(0, client.pollResponses(remaining::add, 0));
+      assertEquals(List.of(third, fourth), remaining);
+      assertEquals(0, client.pollResponses(remaining::add, 10));
+      assertEquals(List.of(third, fourth), remaining, "Successfully dispatched responses must not replay either");
       assertTrue(errors.isEmpty(), errors::toString);
     }
   }

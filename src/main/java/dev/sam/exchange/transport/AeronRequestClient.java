@@ -1,6 +1,8 @@
 package dev.sam.exchange.transport;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -22,7 +24,7 @@ public class AeronRequestClient {
   private final SbeResponseCodec responseCodec = new SbeResponseCodec();
   private final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
   private final IdleStrategy idle = new SleepingIdleStrategy();
-  private final List<CommandResponse> receivedResponses = new ArrayList<>();
+  private final Deque<CommandResponse> receivedResponses = new ArrayDeque<>();
   private final FragmentHandler replyHandler = (replyBuffer, offset, length, header) -> {
     CommandResponse response = responseCodec.decode(replyBuffer, offset, length);
     receivedResponses.add(response);
@@ -111,10 +113,9 @@ public class AeronRequestClient {
 
   public int pollResponses(Consumer<CommandResponse> onResponse, int fragmentLimit) {
     int fragments = replies.poll(replyAssembler, fragmentLimit);
-    for (CommandResponse response : receivedResponses) {
-      onResponse.accept(response);
+    while (!receivedResponses.isEmpty()) {
+      onResponse.accept(receivedResponses.removeFirst());
     }
-    receivedResponses.clear();
     return fragments;
   }
 }
