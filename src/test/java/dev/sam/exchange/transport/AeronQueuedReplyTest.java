@@ -51,6 +51,34 @@ class AeronQueuedReplyTest {
   private static final long DEADLINE = TimeUnit.SECONDS.toNanos(5);
   private static final UUID FILLER_ID = new UUID(0, Long.MAX_VALUE);
 
+  @ParameterizedTest
+  @ValueSource(ints = {300, 65535})
+  void oversizedTradeResultsDisableOnlyTheirReplyRoute(int tradeCount) {
+    try (Fixture fixture = new Fixture(new ReplyDeliveryConfig(64, 4 * 1024 * 1024L, Duration.ofSeconds(5)));
+        Client large = fixture.client();
+        Client healthy = fixture.client()) {
+      for (int id = 1; id <= tradeCount; id++) {
+        fixture.book.add(new PlaceOrder(id, Side.ASK, 100, 1));
+      }
+      fixture.connect(large, healthy);
+      assertEquals(8192, fixture.registry.find(large.route).orElseThrow().maxMessageLength());
+      CommandRequest sweep = request(100000, new PlaceOrder(100000, Side.BID, 100, tradeCount));
+      fixture.submit(large, sweep);
+      assertTrue(fixture.book.snapshot().isEmpty());
+      assertTrue(fixture.state.hasProcessed(sweep.requestId()));
+
+      CommandRequest other = request(100001, new CancelOrder(1));
+      fixture.send(healthy, other);
+      fixture.receive(healthy, 1);
+      assertEquals(List.of(new CommandResponse(other.requestId(), new CancelResult(1, false))), healthy.received);
+      assertTrue(fixture.registry.find(large.route).isEmpty());
+      assertEquals(1, fixture.stats.droppedCount(ReplyDeliveryStats.DropReason.UNENCODABLE));
+      assertEquals(List.of(sweep, other), fixture.log.accepted);
+      assertEquals(tradeCount, ((PlaceResult) fixture.state.process(sweep).result()).trades().size(),
+          "A delivery limit must preserve the original cached outcome");
+    }
+  }
+
   @Test
   void deliveryStatsSeparateOffersFromCapacityAndExpiryDrops() {
     try (Fixture fixture = new Fixture(new ReplyDeliveryConfig(2, 1024, Duration.ofSeconds(5)));

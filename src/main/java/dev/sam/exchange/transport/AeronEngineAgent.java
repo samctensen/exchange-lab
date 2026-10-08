@@ -138,12 +138,17 @@ public class AeronEngineAgent implements Agent {
     // A recorded command must execute even if its connection has departed. Retries use the cached result.
     CommandResponse response = processor.process(routedRequest.request());
     long route = routedRequest.responseCorrelationId();
-    PendingReplyQueue queue = replyQueues.get(route);
-    if (!enqueueReply(route, response, timedRequest, recordedNanos)) {
+    final boolean enqueued;
+    try {
+      enqueued = enqueueReply(route, response, timedRequest, recordedNanos);
+    } catch (IllegalArgumentException unsupportedResponse) {
+      // A valid sweep can produce more trades than the wire format can represent.
+      disableReplyRoute(route, DropReason.UNENCODABLE, 1);
+      return;
+    }
+    if (!enqueued) {
       // Missing routes and full queues affect delivery only; never roll back or rerun the command.
-      recordDropped(queue == null ? DropReason.UNAVAILABLE : DropReason.CAPACITY, queue == null ? 1 : queue.size() + 1);
-      replyQueues.remove(route);
-      responsePublications.remove(route);
+      disableReplyRoute(route, replyQueues.containsKey(route) ? DropReason.CAPACITY : DropReason.UNAVAILABLE, 1);
     }
   }
 
@@ -318,8 +323,16 @@ public class AeronEngineAgent implements Agent {
         continue;
       }
 
+      int length = responseCodec.encodedLength(reply.response());
+      if (length > publication.get().maxMessageLength()) {
+        recordDropped(DropReason.UNENCODABLE, queue.size());
+        responsePublications.remove(entry.getKey());
+        iterator.remove();
+        work++;
+        continue;
+      }
       // Each queue holds response objects; another route may have overwritten the shared buffer.
-      int length = responseCodec.encode(reply.response(), buffer, 0);
+      responseCodec.encode(reply.response(), buffer, 0);
       long offerResult = publication.get().offer(buffer, 0, length);
       if (offerResult >= 0) {
         queue.poll();
@@ -351,5 +364,11 @@ public class AeronEngineAgent implements Agent {
     if (replyStats != null) {
       replyStats.dropped(reason, count);
     }
+  }
+
+  private void disableReplyRoute(long route, DropReason reason, int additionalReplies) {
+    PendingReplyQueue queue = replyQueues.remove(route);
+    recordDropped(reason, additionalReplies + (queue == null ? 0 : queue.size()));
+    responsePublications.remove(route);
   }
 }
