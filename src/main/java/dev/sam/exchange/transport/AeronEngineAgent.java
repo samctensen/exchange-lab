@@ -6,6 +6,7 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -32,10 +33,10 @@ public class AeronEngineAgent implements Agent {
   private final boolean logResults;
   private final EngineStageTimings stageTimings;
   private final int logWindow;
+  private final ReplyDeliveryConfig replyConfig;
+  private final long replyTimeoutNanos;
 
   private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
-  private static final int MAX_PENDING_REPLIES_PER_CLIENT = 64;
-  private static final long MAX_PENDING_REPLY_BYTES_PER_CLIENT = 64 * 1024L;
 
   static final int DEFAULT_LOG_WINDOW = 8;
   private RoutedRequest pendingRequest;
@@ -87,7 +88,16 @@ public class AeronEngineAgent implements Agent {
   AeronEngineAgent(Subscription requests, ResponsePublicationRegistry responsePublications,
       RequestStateMachine processor, RequestLog requestLog, boolean logResults, NanoClock clock,
       EngineStageTimings stageTimings, int logWindow) {
+    this(requests, responsePublications, processor, requestLog, logResults, clock, stageTimings, logWindow,
+        ReplyDeliveryConfig.defaults());
+  }
+
+  AeronEngineAgent(Subscription requests, ResponsePublicationRegistry responsePublications,
+      RequestStateMachine processor, RequestLog requestLog, boolean logResults, NanoClock clock,
+      EngineStageTimings stageTimings, int logWindow, ReplyDeliveryConfig replyConfig) {
     this.logWindow = validateLogWindow(logWindow);
+    this.replyConfig = Objects.requireNonNull(replyConfig, "replyConfig");
+    this.replyTimeoutNanos = replyConfig.timeout().toNanos();
     this.requests = requests;
     this.responsePublications = responsePublications;
     this.processor = processor;
@@ -249,8 +259,7 @@ public class AeronEngineAgent implements Agent {
     }
     responsePublications.register(correlationId);
     registeredImages.put(correlationId, image);
-    replyQueues.put(correlationId,
-        new PendingReplyQueue(MAX_PENDING_REPLIES_PER_CLIENT, MAX_PENDING_REPLY_BYTES_PER_CLIENT));
+    replyQueues.put(correlationId, new PendingReplyQueue(replyConfig.maxReplies(), replyConfig.maxBytes()));
     return 1;
   }
 
@@ -262,7 +271,7 @@ public class AeronEngineAgent implements Agent {
     }
     int encodedLength = responseCodec.encode(response, buffer, 0);
     long preparedNanos = clock.nanoTime();
-    PendingReply reply = new PendingReply(response, preparedNanos + TIMEOUT_NS, timedRequest, recordedNanos,
+    PendingReply reply = new PendingReply(response, preparedNanos + replyTimeoutNanos, timedRequest, recordedNanos,
         preparedNanos);
     return queue.offer(reply, encodedLength);
   }

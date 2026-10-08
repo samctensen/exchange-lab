@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.util.ArrayList;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -49,6 +50,45 @@ import io.aeron.driver.ThreadingMode;
 class AeronQueuedReplyTest {
   private static final long DEADLINE = TimeUnit.SECONDS.toNanos(5);
   private static final UUID FILLER_ID = new UUID(0, Long.MAX_VALUE);
+
+  @ParameterizedTest
+  @CsvSource({"2, 1024", "64, 66"})
+  void configuredCapacityOrByteLimitClosesOnlyTheFullRoute(int capacity, long bytes) {
+    try (Fixture fixture = new Fixture(new ReplyDeliveryConfig(capacity, bytes, Duration.ofSeconds(5)));
+        Client blocked = fixture.client();
+        Client healthy = fixture.client()) {
+      fixture.connect(blocked, healthy);
+      fixture.backPressure(blocked);
+      fixture.submit(blocked, request(1, new CancelOrder(1)));
+      fixture.submit(blocked, request(2, new CancelOrder(2)));
+      assertTrue(fixture.registry.find(blocked.route).isPresent(), "Two 33-byte replies fit exactly");
+      fixture.submit(blocked, request(3, new CancelOrder(3)));
+      assertTrue(fixture.registry.find(blocked.route).isEmpty());
+      fixture.send(healthy, request(4, new CancelOrder(4)));
+      fixture.receive(healthy, 1);
+      assertEquals(List.of(new CommandResponse(new UUID(0, 4), new CancelResult(4, false))), healthy.received);
+      assertEquals(4, fixture.log.accepted.size());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(longs = {0, Long.MAX_VALUE - 5})
+  void configuredReplyDeadlineWorksAcrossNanoClockWrap(long start) {
+    try (Fixture fixture = new Fixture(new ReplyDeliveryConfig(64, 65536, Duration.ofNanos(10)));
+        Client blocked = fixture.client()) {
+      fixture.connect(blocked);
+      fixture.backPressure(blocked);
+      fixture.clock.now = start;
+      fixture.submit(blocked, request(1, new CancelOrder(1)));
+      fixture.clock.now = start + 9;
+      assertEquals(0, fixture.agent.doWork());
+      assertTrue(fixture.registry.find(blocked.route).isPresent());
+      fixture.clock.now = start + 10;
+      assertEquals(1, fixture.agent.doWork());
+      assertTrue(fixture.registry.find(blocked.route).isEmpty());
+      assertEquals(1, fixture.log.accepted.size());
+    }
+  }
 
   @Test
   void aClientArrivingAfterTheImageScanReceivesItsCachedReply() {
@@ -361,7 +401,16 @@ class AeronQueuedReplyTest {
     final Log log = new Log();
     final OrderBook book = new OrderBook();
     final RequestStateMachine state = new RequestStateMachine(new MatchingEngine(book));
-    final AeronEngineAgent agent = new AeronEngineAgent(requests, registry, state, log, false, clock, timings);
+    final AeronEngineAgent agent;
+
+    Fixture() {
+      this(ReplyDeliveryConfig.defaults());
+    }
+
+    Fixture(ReplyDeliveryConfig config) {
+      agent = new AeronEngineAgent(requests, registry, state, log, false, clock, timings,
+          AeronEngineAgent.DEFAULT_LOG_WINDOW, config);
+    }
 
     Client client() {
       Subscription replies = aeron.addSubscription("aeron:ipc?control-mode=response", 2);
