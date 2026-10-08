@@ -20,6 +20,7 @@ import dev.sam.exchange.protocol.sbe.MessageHeaderEncoder;
 import dev.sam.exchange.protocol.sbe.PlaceOrderResponseDecoder;
 import dev.sam.exchange.protocol.sbe.PlaceOrderResponseDecoder.TradesDecoder;
 import dev.sam.exchange.protocol.sbe.PlaceOrderResponseEncoder;
+import dev.sam.exchange.protocol.sbe.PlaceOrderResponseEncoder.TradesEncoder;
 import dev.sam.exchange.protocol.sbe.RejectOrderResponseDecoder;
 import dev.sam.exchange.protocol.sbe.RejectOrderResponseEncoder;
 import dev.sam.exchange.protocol.sbe.RejectionReason;
@@ -36,7 +37,25 @@ public class SbeResponseCodec {
   private final CancelOrderResponseDecoder cancelDecoder = new CancelOrderResponseDecoder();
   private final RejectOrderResponseDecoder rejectDecoder = new RejectOrderResponseDecoder();
 
+  /** Returns the complete frame size without encoding, rejecting unsupported trade counts. */
+  public int encodedLength(CommandResponse response) {
+    long bodyLength = switch (response.result()) {
+      case PlaceResult place -> {
+        int tradeCount = place.trades().size();
+        if (tradeCount > TradesEncoder.countMaxValue()) {
+          throw new IllegalArgumentException("Trades count exceeds maximum value");
+        }
+        yield (long) PlaceOrderResponseEncoder.BLOCK_LENGTH + TradesEncoder.sbeHeaderSize()
+            + (long) tradeCount * TradesEncoder.sbeBlockLength();
+      }
+      case CancelResult ignored -> CancelOrderResponseEncoder.BLOCK_LENGTH;
+      case RejectResult ignored -> RejectOrderResponseEncoder.BLOCK_LENGTH;
+    };
+    return Math.toIntExact(MessageHeaderEncoder.ENCODED_LENGTH + bodyLength);
+  }
+
   public int encode(CommandResponse response, MutableDirectBuffer buffer, int offset) {
+    encodedLength(response);
     long mostBits = response.requestId().getMostSignificantBits();
     long leastBits = response.requestId().getLeastSignificantBits();
 
