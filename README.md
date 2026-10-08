@@ -97,8 +97,13 @@ mvn spotless:apply   # Format Java sources
 
 This endpoint is local-only and has no authentication or TLS. Each gateway has its own
 Aeron response route; use different `--port` values when running multiple gateway instances.
-The engine still holds one pending reply at a time, so a stalled gateway can delay other clients
-and eventually stop the agent when that reply's deadline expires.
+The engine queues replies separately for each Aeron client connection. A stalled gateway does
+not hold up other gateways' replies or recorded command execution. Each reply queue allows up to
+64 responses and 64 KiB of encoded payload, with a fixed five-second deadline per response.
+Overflow or expiry disables that connection's reply route; it does not undo accepted commands.
+Reconnect and retry the same UUID and command to recover the original result.
+An individual result larger than 64 KiB also exceeds this queue limit; reconnecting cannot make
+that result fit. Larger results require a future size-limit or chunking design.
 
 Zed's class play button supplies Maven's `exec.args` when launching Java. The SBE generation
 execution pins its own schema argument so those launch arguments do not replace the schema path.
@@ -125,7 +130,7 @@ Both processes must use the same `java.io.tmpdir`, where the server creates `exc
 
 The project configures it for Maven tests and Zed terminals. Include it in the launch configuration when running elsewhere. Use matching client/server versions: IPC stream 1 carries SBE `PlaceOrderRequest` and `CancelOrderRequest` messages; stream 2 carries SBE `PlaceOrderResponse`, `CancelOrderResponse`, and `RejectOrderResponse` messages. Both live streams use the binary protocol instead of the old text wrappers.
 
-`AeronEngineServer.main` owns recovery, Archive/Aeron resources, and shutdown. An Agrona `AgentRunner` calls `AeronEngineAgent.doWork()` and handles idling on the dedicated `exchange-engine` thread. Each pass fills the bounded log window and advances the recorded FIFO head through execution and reply delivery without a blocking wait loop. An unsent reply keeps its encoded bytes and original deadline; the next request waits until that reply is queued. Main closes the runner before finishing the log and closing Archive/driver. Agent failures stop the worker and are rethrown by main after cleanup, preserving their original cause. Tests cover shutdown while idle or while a reply has no subscriber, recording failures, reply timeouts, and recovery after SIGKILL.
+`AeronEngineServer.main` owns recovery, Archive/Aeron resources, and shutdown. An Agrona `AgentRunner` calls `AeronEngineAgent.doWork()` and handles idling on the dedicated `exchange-engine` thread. Each pass discovers connections, tries one queued reply per connection, fills the bounded log window, and applies at most one recorded FIFO head. Replies retain immutable results and their original deadlines; the agent encodes each response into its shared buffer immediately before offering it. Matching remains single-threaded, while reply delivery progresses independently for each connection. Main closes the runner before finishing the log and closing Archive/driver. Recording failures stop the worker and are rethrown by main after cleanup, preserving their original cause. Reply expiry closes only its route. Tests cover shutdown, slow-client isolation, queue overflow, reconnect retries, recording failures, and recovery after SIGKILL. See [the architecture walkthrough](docs/architecture.md#follow-one-order) for the complete path.
 
 The engine runner uses `BusySpinIdleStrategy`, following [Aeron’s guidance for low-latency subscribers](https://github.com/aeron-io/aeron/wiki/Best-Practices-Guide#application-threads). It keeps polling when idle and can consume roughly one CPU core. Budget a dedicated core for this approach in production; this demo leaves CPU placement to the operating system and does not reserve or pin a core. Stop the server with **⌃C** when finished.
 
