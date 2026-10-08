@@ -19,7 +19,10 @@ import dev.sam.exchange.persistence.ArchiveRequestLog;
 
 public class AeronEngineServer {
   public static void main(String[] args) throws IOException, InterruptedException {
-
+    if (args.length == 1 && "--help".equals(args[0])) {
+      System.out.print(EngineServerConfig.help());
+      return;
+    }
     EngineServerConfig config = EngineServerConfig.parse(args);
     EngineStageTimings stageTimings = config.stageSamples() == 0
         ? null

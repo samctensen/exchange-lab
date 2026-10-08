@@ -101,6 +101,43 @@ class EngineServerConfigTest {
 
   @Test
   @Timeout(10)
+  void standaloneHelpPrintsOptionsAndDefaultsWithoutCreatingResources(@TempDir Path tempDir) throws Exception {
+    Path output = tempDir.resolve("help.log");
+    String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+    Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+        "-Djava.io.tmpdir=" + tempDir, "-cp", classpath, AeronEngineServer.class.getName(), "--help")
+        .directory(tempDir.toFile()).redirectErrorStream(true).redirectOutput(output.toFile()).start();
+    try {
+      assertTrue(server.waitFor(5, TimeUnit.SECONDS), "Help must exit without starting the server");
+      String help = Files.readString(output);
+      assertEquals(0, server.exitValue(), help);
+      assertTrue(help.contains("Usage: AeronEngineServer"), help);
+      assertTrue(help.contains("--quiet"), help);
+      assertTrue(help.contains("--log-window=count"), help);
+      assertTrue(help.contains("--stage-timing=warmupCount,sampleCount"), help);
+      assertTrue(help.contains("--help"), help);
+      assertTrue(help.contains("data/archive"), help);
+      assertTrue(help.contains("default: 8"), help);
+      assertTrue(help.contains("disabled"), help);
+      assertFalse(Files.exists(tempDir.resolve("data")));
+      assertFalse(Files.exists(tempDir.resolve("exchange-lab-aeron")));
+    } finally {
+      if (server.isAlive()) {
+        server.destroyForcibly();
+        server.waitFor(3, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"--quiet", "--unknown", "--help", "archive"})
+  void rejectsHelpCombinedWithOtherArguments(String other) {
+    assertThrows(IllegalArgumentException.class, () -> AeronEngineServer.main(new String[]{"--help", other}));
+    assertThrows(IllegalArgumentException.class, () -> AeronEngineServer.main(new String[]{other, "--help"}));
+  }
+
+  @Test
+  @Timeout(10)
   void rejectsLaterInvalidArgumentBeforeAllocatingTimingBuffersOrCreatingResources(@TempDir Path tempDir)
       throws Exception {
     Path archive = tempDir.resolve("archive");

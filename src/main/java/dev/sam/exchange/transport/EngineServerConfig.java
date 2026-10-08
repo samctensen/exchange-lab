@@ -4,7 +4,19 @@ import java.nio.file.Path;
 
 record EngineServerConfig(Path archiveDirectory, boolean quiet, int logWindow, int stageWarmup, int stageSamples) {
   private static final String USAGE = "Usage: AeronEngineServer [archiveDirectory] [--quiet] "
-      + "[--stage-timing=warmupCount,sampleCount] [--log-window=count]";
+      + "[--stage-timing=warmupCount,sampleCount] [--log-window=count]\n       AeronEngineServer --help";
+
+  static String help() {
+    return USAGE + "\n\n" + """
+        Options:
+          archiveDirectory                      Persistent archive location (default: data/archive).
+          --quiet                               Suppress per-result logging (default: result logging enabled).
+          --log-window=count                    Request log window (default: %d; count >= 1).
+          --stage-timing=warmupCount,sampleCount Collect stage timing (default: disabled).
+                                                Warmup must be >= 0; samples must be 1..1000000.
+          --help                                Show this help; use by itself.
+        """.formatted(AeronEngineAgent.DEFAULT_LOG_WINDOW);
+  }
 
   static EngineServerConfig parse(String[] args) {
     Path archiveDirectory = null;
