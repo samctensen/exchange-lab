@@ -22,7 +22,7 @@ class EngineStageTimingsTest {
     assertTrue(report.contains("Stage timing: 2/2 samples, skipped 1/1 completed logged requests"), report);
     assertTrue(report.contains("Log offer: mean=30.000 p50=20.000 p99=40.000 max=40.000 us"), report);
     assertTrue(report.contains("Recording observation: mean=45.000 p50=30.000 p99=60.000 max=60.000 us"), report);
-    assertTrue(report.contains("Process and encode: mean=60.000 p50=40.000 p99=80.000 max=80.000 us"), report);
+    assertTrue(report.contains("Process and size: mean=60.000 p50=40.000 p99=80.000 max=80.000 us"), report);
     assertTrue(report.contains("Reply offer: mean=75.000 p50=50.000 p99=100.000 max=100.000 us"), report);
     assertTrue(report.contains("Server total: mean=210.000 p50=140.000 p99=280.000 max=280.000 us"), report);
   }

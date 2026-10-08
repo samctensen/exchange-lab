@@ -109,7 +109,7 @@ class AeronLatencyBenchmarkTest {
       if (stageTiming) {
         assertTrue(output.contains("Stage timing: " + samples + "/" + samples + " samples, skipped " + warmup + "/"
             + warmup + " completed logged requests"), output);
-        for (String stage : List.of("Log offer", "Recording observation", "Process and encode", "Reply offer",
+        for (String stage : List.of("Log offer", "Recording observation", "Process and size", "Reply offer",
             "Server total")) {
           assertTrue(output.contains(stage + ": mean="), output);
         }

@@ -76,7 +76,7 @@ class AeronEngineAgentTest {
         String report = timings.summarize();
         assertTrue(report.contains("Log offer: mean=20.000"), report);
         assertTrue(report.contains("Recording observation: mean=30.000"), report);
-        assertTrue(report.contains("Process and encode: mean=40.000"), report);
+        assertTrue(report.contains("Process and size: mean=40.000"), report);
         assertTrue(report.contains("Reply offer: mean=50.000"), report);
         assertTrue(report.contains("Server total: mean=140.000"), report);
 

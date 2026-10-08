@@ -205,8 +205,8 @@ Add `--stage-timing=500,2000` to the dedicated server's program arguments, along
 | --- | --- |
 | Log offer | Complete decoded request admitted by the agent → successful request-log offer, including back pressure |
 | Recording observation | Successful log offer → agent observes the FIFO head's recorded position, including queueing and scheduling |
-| Process and encode | That observation → command processed and reply encoded |
-| Reply offer | Encoded reply ready → successful reply publication, including back pressure |
+| Process and size | That observation → command processed and encoded reply size calculated |
+| Reply offer | Sized reply ready → successful reply publication, including queueing, encoding, and back pressure |
 | Server total | Admission → successful reply publication for the same request |
 
 The server report gives mean, p50, p99, and maximum microseconds. It excludes inbound IPC/decode time before admission and client receipt after publication. **Recording observation is not pure disk-sync time**: Archive polling, forced writes, FIFO delay, and the engine's observation all contribute. Stage means sum to the mean server total (apart from rounding); stage percentiles do not sum to total percentiles. Client and server percentiles also cannot be subtracted to isolate transport time. Samples are written only by the agent and summarized after it stops; no per-request output is added. Compare with timing disabled to check the measurement's impact.
