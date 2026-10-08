@@ -2,7 +2,6 @@ package dev.sam.exchange.transport;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -39,6 +38,37 @@ import io.aeron.driver.ThreadingMode;
 
 @Timeout(15)
 class AeronEngineRoutingTest {
+  @Test
+  void anUndeliverableReplyDoesNotBlockAnotherGatewaysTrade() {
+    try (Fixture fixture = new Fixture(); Client a = fixture.client(); Client b = fixture.client()) {
+      fixture.await(() -> a.replies.isConnected() && b.replies.isConnected(), "connecting both reply routes");
+      Publication toA = fixture.registry.find(a.route).orElseThrow();
+      a.replies.close();
+      fixture.awaitDriver(() -> !toA.isConnected(), "disconnecting A's reply subscriber");
+
+      PlaceOrder bid = new PlaceOrder(1, Side.BID, 100, 10);
+      CommandRequest first = new CommandRequest(new UUID(0, 1), bid);
+      CommandRequest second = new CommandRequest(new UUID(0, 2), new PlaceOrder(2, Side.ASK, 99, 4));
+      fixture.send(a, first);
+      fixture.await(() -> !fixture.book.snapshot().isEmpty(), "applying A's order");
+      fixture.send(b, second);
+      for (int i = 0; i < 20; i++) {
+        fixture.agent.doWork();
+      }
+
+      assertEquals(List.of(first, second), fixture.log.accepted,
+          "A's undeliverable reply must not block B's command from entering the log");
+      assertEquals(List.of(new OrderSnapshot(bid, 6)), fixture.book.snapshot());
+      fixture.await(() -> {
+        b.poll();
+        return b.received.size() == 1;
+      }, "receiving B's trade result");
+      assertEquals(
+          List.of(new CommandResponse(second.requestId(), new PlaceResult(2, List.of(new Trade(2, 1, 100, 4)), 0))),
+          b.received);
+    }
+  }
+
   @Test
   void registersAReplyRouteBeforeTheFirstRequestArrives() {
     try (Fixture fixture = new Fixture(); Client client = fixture.client()) {
@@ -110,7 +140,7 @@ class AeronEngineRoutingTest {
   }
 
   @Test
-  void removesADepartedImageWhileItsReplyIsPendingWithoutResettingTheDeadline() {
+  void removesADepartedImageAndDiscardsItsQueuedReplies() {
     try (Fixture fixture = new Fixture(); Client client = fixture.client()) {
       fixture.await(client.replies::isConnected, "connecting the response route");
       Publication replies = fixture.registry.find(client.route).orElseThrow();
@@ -129,8 +159,7 @@ class AeronEngineRoutingTest {
       assertTrue(fixture.registry.find(client.route).isEmpty());
       assertTrue(replies.isClosed());
       fixture.clock.now = TimeUnit.SECONDS.toNanos(5);
-      IllegalStateException failure = assertThrows(IllegalStateException.class, fixture.agent::doWork);
-      assertTrue(failure.getMessage().contains("Timed out sending reply"));
+      assertEquals(0, fixture.agent.doWork(), "The departed connection no longer has a reply to expire");
       assertEquals(List.of(request), fixture.log.accepted);
     }
   }
@@ -147,8 +176,9 @@ class AeronEngineRoutingTest {
       fixture.clock.now = TimeUnit.SECONDS.toNanos(4);
       assertEquals(0, fixture.agent.doWork());
       fixture.clock.now = TimeUnit.SECONDS.toNanos(5);
-      IllegalStateException failure = assertThrows(IllegalStateException.class, fixture.agent::doWork);
-      assertTrue(failure.getMessage().contains("Timed out sending reply"));
+      assertEquals(1, fixture.agent.doWork(), "The route expires even if registration never completed");
+      assertTrue(fixture.registry.find(client.route).isEmpty());
+      assertEquals(0, fixture.agent.doWork(), "A disabled route must not register again on the next pass");
       assertEquals(List.of(request), fixture.log.accepted);
       assertEquals(List.of(new OrderSnapshot((PlaceOrder) request.command(), 10)), fixture.book.snapshot());
     }

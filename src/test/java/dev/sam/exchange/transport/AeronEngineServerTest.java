@@ -280,10 +280,9 @@ class AeronEngineServerTest {
     }
   }
 
-  @ParameterizedTest(name = "recording fails: {0}")
-  @ValueSource(booleans = {false, true})
+  @Test
   @Timeout(15)
-  void reportsAgentFailureAndClosesResources(boolean failRecording, @TempDir Path tempDir) throws Exception {
+  void reportsRecordingFailureAndClosesResources(@TempDir Path tempDir) throws Exception {
     Path archiveDirectory = tempDir.resolve("archive");
     Path serverLog = tempDir.resolve("server.log");
     Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
@@ -297,13 +296,11 @@ class AeronEngineServerTest {
 
     try {
       awaitServerOutput(server, serverLog, "Server ready:");
-      if (failRecording) {
-        // Stop the real recording after startup; the next command must fail before engine mutation.
-        try (AeronArchive archive = ArchiveTestSupport.connect(driverDirectory)) {
-          long id = ArchiveTestSupport.recordingId(archive);
-          archive.tryStopRecordingByIdentity(id);
-          ArchiveTestSupport.await(() -> archive.getStopPosition(id) != AeronArchive.NULL_POSITION);
-        }
+      // Stop the real recording after startup; the next command must fail before engine mutation.
+      try (AeronArchive archive = ArchiveTestSupport.connect(driverDirectory)) {
+        long id = ArchiveTestSupport.recordingId(archive);
+        archive.tryStopRecordingByIdentity(id);
+        ArchiveTestSupport.await(() -> archive.getStopPosition(id) != AeronArchive.NULL_POSITION);
       }
       try (
           Aeron aeron = Aeron
@@ -320,29 +317,96 @@ class AeronEngineServerTest {
         }
         assertTrue(errors.isEmpty(), errors::toString);
 
-        // No reply subscriber connects: a successful recording write is followed by the reply-send timeout.
         assertTrue(server.waitFor(8, TimeUnit.SECONDS),
             "Agent failure did not stop the server\n" + Files.readString(serverLog));
         assertTrue(server.exitValue() != 0, "Agent failure was reported as a successful process exit");
       }
       String output = Files.readString(serverLog);
       assertTrue(output.contains("IllegalStateException: Engine agent failed"), output);
-      String expectedCause = failRecording
-          ? "Caused by: java.lang.IllegalStateException: Request recording stopped unexpectedly:"
-          : "Caused by: java.lang.IllegalStateException: Timed out sending reply";
-      assertTrue(output.contains(expectedCause),
+      assertTrue(output.contains("Caused by: java.lang.IllegalStateException: Request recording stopped unexpectedly:"),
           "The original agent failure must remain the exception cause\n" + output);
       assertFalse(output.contains("Server shutdown exceeded"), output);
       assertFalse(output.contains("failed to close"), output);
       assertFalse(output.contains("Result:"), "An undelivered response must not be logged as sent\n" + output);
       assertFalse(Files.exists(driverDirectory), "The runner and driver were not closed after failure\n" + output);
-      if (failRecording) {
-        assertEquals(List.of(), ArchiveTestSupport.readAll(archiveDirectory),
-            "A failed recording must not accept the request");
-      } else {
-        assertEquals(List.of(request), ArchiveTestSupport.readAll(archiveDirectory),
-            "A reply failure must preserve the single recorded command for recovery");
+      assertEquals(List.of(), ArchiveTestSupport.readAll(archiveDirectory),
+          "A failed recording must not accept the request");
+    } finally {
+      if (server.isAlive()) {
+        server.destroyForcibly();
+        server.waitFor(3, TimeUnit.SECONDS);
       }
+    }
+  }
+
+  @Test
+  @Timeout(30)
+  void keepsServingAfterReplyTimeoutAndReturnsCachedResultOnReconnect(@TempDir Path tempDir) throws Exception {
+    Path archiveDirectory = tempDir.resolve("archive");
+    Path serverLog = tempDir.resolve("server.log");
+    Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
+    String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+    Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+        "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Djava.io.tmpdir=" + tempDir, "-cp", classpath,
+        AeronEngineServer.class.getName(), archiveDirectory.toString()).redirectErrorStream(true)
+        .redirectOutput(serverLog.toFile()).start();
+    CommandRequest bid = new CommandRequest(new UUID(0L, 1L), new PlaceOrder(1L, Side.BID, 100L, 10L));
+    CommandRequest firstFill = new CommandRequest(new UUID(0L, 2L), new PlaceOrder(2L, Side.ASK, 99L, 4L));
+    CommandRequest finalFill = new CommandRequest(new UUID(0L, 3L), new PlaceOrder(3L, Side.ASK, 100L, 6L));
+    ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
+
+    try {
+      awaitServerOutput(server, serverLog, "Server ready:");
+      long positionBeforeRetry;
+      try (
+          Aeron aeron = Aeron
+              .connect(new Aeron.Context().aeronDirectoryName(driverDirectory.toString()).errorHandler(errors::add));
+          Publication commands = aeron.addPublication("aeron:ipc", 1);
+          AeronArchive archive = ArchiveTestSupport.connect(driverDirectory)) {
+        // Keep this request image alive, but never create a subscriber for its reply.
+        ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
+        int length = new SbeRequestCodec().encode(bid, buffer, 0);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        SleepingIdleStrategy idle = new SleepingIdleStrategy();
+        while (commands.offer(buffer, 0, length) < 0) {
+          assertTrue(server.isAlive(), "Server exited before the test could send its request");
+          assertTrue(System.nanoTime() - deadline < 0, "Test request could not be sent");
+          idle.idle();
+        }
+        long recordingId = ArchiveTestSupport.recordingId(archive);
+        ArchiveTestSupport.await(() -> archive.getRecordingPosition(recordingId) > 0);
+
+        assertEquals(List.of(new PlaceResult(2L, List.of(new Trade(2L, 1L, 100L, 4L)), 0L)),
+            exchangeRequests(server, serverLog, driverDirectory, List.of(firstFill), false, false));
+
+        // This fill proves the bid was processed and its reply deadline had already started.
+        // Waiting five seconds from that observation crosses the actual delivery deadline.
+        assertFalse(server.waitFor(5, TimeUnit.SECONDS),
+            "An undeliverable reply stopped the server\n" + Files.readString(serverLog));
+        assertFalse(Files.readString(serverLog).contains("Result: PlaceResult[orderId=1,"),
+            "An undelivered response must not be logged as sent");
+
+        assertEquals(List.of(new PlaceResult(3L, List.of(new Trade(3L, 1L, 100L, 6L)), 0L)),
+            exchangeRequests(server, serverLog, driverDirectory, List.of(finalFill), false, false));
+        positionBeforeRetry = archive.getRecordingPosition(recordingId);
+        assertTrue(errors.isEmpty(), errors::toString);
+      }
+
+      try (AeronArchive archive = ArchiveTestSupport.connect(driverDirectory)) {
+        // A new connection gets the original ten-lot result even though the bid is now fully filled.
+        assertEquals(List.of(new PlaceResult(1L, List.of(), 10L)),
+            exchangeRequests(server, serverLog, driverDirectory, List.of(bid), false, false));
+        assertEquals(positionBeforeRetry, archive.getRecordingPosition(ArchiveTestSupport.recordingId(archive)),
+            "Retrying a request whose reply timed out must not append it again");
+      }
+
+      server.destroy();
+      assertTrue(server.waitFor(3, TimeUnit.SECONDS), "Server did not stop after the shutdown request");
+      String output = Files.readString(serverLog);
+      assertFalse(output.contains("Exception"), output);
+      assertFalse(output.contains("Server shutdown exceeded"), output);
+      assertFalse(Files.exists(driverDirectory), "Shutdown did not remove the Aeron driver directory\n" + output);
+      assertEquals(List.of(bid, firstFill, finalFill), ArchiveTestSupport.readAll(archiveDirectory));
     } finally {
       if (server.isAlive()) {
         server.destroyForcibly();
@@ -494,7 +558,8 @@ class AeronEngineServerTest {
           responses.clear();
           assertTrue(server.isAlive(), "Server exited before replying\n" + Files.readString(serverLog));
           assertTrue(errors.isEmpty(), errors::toString);
-          assertTrue(System.nanoTime() - deadline < 0, "Timed out receiving test reply");
+          assertTrue(System.nanoTime() - deadline < 0,
+              "Timed out receiving test reply\n" + Files.readString(serverLog));
           idle.idle(fragments);
         }
       }
