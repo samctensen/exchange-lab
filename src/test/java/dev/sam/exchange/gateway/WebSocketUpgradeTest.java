@@ -6,6 +6,8 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.TreeMap;
 
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -48,16 +50,47 @@ class WebSocketUpgradeTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"POST", "PUT", "DELETE", "HEAD", "OPTIONS"})
+  void ordersEndpointRequiresGet(String method) throws Exception {
+    try (Fixture fixture = new Fixture()) {
+      Response response = response(fixture.server.port(), method, "/orders", "");
+      assertEquals("HTTP/1.1 405 Method Not Allowed", response.status());
+      assertEquals("GET", response.headers().get("Allow"));
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"GET, /wrong", "POST, /wrong", "GET, /orders?query=1", "POST, /orders/"})
+  void unknownPathsRemainNotFound(String method, String path) throws Exception {
+    try (Fixture fixture = new Fixture()) {
+      assertEquals("HTTP/1.1 404 Not Found", response(fixture.server.port(), method, path, "").status());
+    }
+  }
+
   private static String status(int port, String headers) throws Exception {
+    return response(port, "GET", "/orders", headers).status();
+  }
+
+  private static Response response(int port, String method, String path, String headers) throws Exception {
     try (Socket socket = new Socket("127.0.0.1", port)) {
       socket.setSoTimeout(3000);
-      String request = "GET /orders HTTP/1.1\r\nHost: 127.0.0.1:" + port
+      String request = method + " " + path + " HTTP/1.1\r\nHost: 127.0.0.1:" + port
           + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
           + "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" + headers + "\r\n";
       socket.getOutputStream().write(request.getBytes(StandardCharsets.US_ASCII));
       var reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
-      return reader.readLine();
+      String status = reader.readLine();
+      Map<String, String> responseHeaders = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+      for (String line; (line = reader.readLine()) != null && !line.isEmpty();) {
+        String[] header = line.split(":", 2);
+        responseHeaders.put(header[0], header[1].trim());
+      }
+      return new Response(status, responseHeaders);
     }
+  }
+
+  private record Response(String status, Map<String, String> headers) {
   }
 
   private static class Fixture implements AutoCloseable {
