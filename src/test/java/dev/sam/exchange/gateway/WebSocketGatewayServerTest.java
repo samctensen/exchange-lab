@@ -58,6 +58,39 @@ class WebSocketGatewayServerTest {
   }
 
   @ParameterizedTest
+  @ValueSource(ints = {1, 2})
+  void launcherUsesConfiguredTotalAttempts(int attempts) throws Exception {
+    assertTimedOutRequestAttempts(attempts, "--max-attempts=" + attempts, "--timeout-ms=20");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"0", "-1", "2147483648", "oops", ""})
+  void invalidAttemptLimitsIdentifyTheirFlag(String attempts) {
+    var error = assertThrows(IllegalArgumentException.class,
+        () -> WebSocketGatewayServer.main(new String[]{"--max-attempts=" + attempts}));
+    assertTrue(error.getMessage().contains("--max-attempts"));
+  }
+
+  @Test
+  void preservesRetryOptionsInEitherOrder() {
+    var timeoutFirst = assertDoesNotThrow(() -> WebSocketGatewayServer.Config
+        .parse(new String[]{"--timeout-ms=17", "--max-attempts=2"}));
+    var attemptsFirst = assertDoesNotThrow(() -> WebSocketGatewayServer.Config
+        .parse(new String[]{"--max-attempts=2", "--timeout-ms=17"}));
+    assertEquals(Duration.ofMillis(17), timeoutFirst.clientConfig().timeout());
+    assertEquals(2, timeoutFirst.clientConfig().maxAttempts());
+    assertEquals(timeoutFirst, attemptsFirst);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"--aeron-directory=driver", "--timeout-ms=20", "--max-attempts=2"})
+  void rejectsRepeatedConnectionOptions(String argument) {
+    var error = assertThrows(IllegalArgumentException.class,
+        () -> WebSocketGatewayServer.Config.parse(new String[]{argument, argument}));
+    assertTrue(error.getMessage().startsWith("Duplicate gateway argument:"));
+  }
+
+  @ParameterizedTest
   @ValueSource(strings = {"1", "9223372036854"})
   void acceptsTimeoutBoundaries(String milliseconds) {
     assertDoesNotThrow(() -> WebSocketGatewayServer.Config.parse(new String[]{"--timeout-ms=" + milliseconds}));

@@ -29,6 +29,7 @@ public final class WebSocketGatewayServer {
             --aeron-directory=p  Existing engine Media Driver directory
                                  (default: java.io.tmpdir/exchange-lab-aeron)
             --timeout-ms=n       Timeout for each send and reply wait in milliseconds (default: 5000)
+            --max-attempts=n     Total send attempts, including the first (default: 3; minimum: 1)
             --help               Print this help and exit; use by itself
           """);
       return;
@@ -99,6 +100,7 @@ public final class WebSocketGatewayServer {
       int maxInFlight = 8;
       String aeronDirectory = defaultAeronDirectory();
       Duration timeout = ClientConfig.defaults().timeout();
+      int maxAttempts = ClientConfig.defaults().maxAttempts();
       var seen = new HashSet<String>();
       for (String arg : args) {
         String[] parts = arg.split("=", 2);
@@ -110,11 +112,16 @@ public final class WebSocketGatewayServer {
           case "--max-in-flight" -> maxInFlight = integerValue(parts);
           case "--aeron-directory" -> aeronDirectory = argumentValue(parts);
           case "--timeout-ms" -> timeout = timeoutValue(parts);
+          case "--max-attempts" -> {
+            maxAttempts = integerValue(parts);
+            if (maxAttempts < 1)
+              throw new IllegalArgumentException("--max-attempts must be positive");
+          }
           default -> throw new IllegalArgumentException("Unknown gateway argument: " + parts[0]);
         }
       }
       return new Config(port, queueCapacity, maxInFlight, aeronDirectory,
-          new ClientConfig(timeout, ClientConfig.defaults().maxAttempts()));
+          new ClientConfig(timeout, maxAttempts));
     }
 
     private static Duration timeoutValue(String[] parts) {
