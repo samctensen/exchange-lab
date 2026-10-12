@@ -144,7 +144,8 @@ public final class WebSocketGateway implements AutoCloseable {
         failure = HttpResponseStatus.BAD_REQUEST;
       else if (!request.method().equals(HttpMethod.GET) || !request.uri().equals("/orders"))
         failure = HttpResponseStatus.NOT_FOUND;
-      else if (!allowedOrigin(request.headers().get(HttpHeaderNames.ORIGIN)))
+      else if (request.headers().getAll(HttpHeaderNames.ORIGIN).size() > 1
+          || !allowedOrigin(request.headers().get(HttpHeaderNames.ORIGIN)))
         failure = HttpResponseStatus.FORBIDDEN;
       if (failure != null) {
         ctx.writeAndFlush(new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, failure))
