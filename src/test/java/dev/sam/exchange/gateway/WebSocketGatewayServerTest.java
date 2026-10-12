@@ -5,13 +5,61 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import io.aeron.driver.MediaDriver;
+
 class WebSocketGatewayServerTest {
+  @TempDir
+  Path temporaryDirectory;
+
+  @Test
+  void launcherConnectsToTheSelectedAeronDirectory() throws Exception {
+    Path driverDirectory = temporaryDirectory.resolve("selected-driver");
+    Path output = temporaryDirectory.resolve("gateway.log");
+    try (MediaDriver driver = MediaDriver.launchEmbedded(new MediaDriver.Context()
+        .aeronDirectoryName(driverDirectory.toString()).dirDeleteOnShutdown(true))) {
+      Process gateway = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+          "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-cp", System.getProperty("java.class.path"),
+          WebSocketGatewayServer.class.getName(), "--port=0", "--aeron-directory=" + driver.aeronDirectoryName())
+          .redirectErrorStream(true).redirectOutput(output.toFile()).start();
+      try {
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        String log;
+        do {
+          log = Files.readString(output);
+          if (log.contains("WebSocket gateway listening on ws://127.0.0.1:"))
+            break;
+          Thread.sleep(10);
+        } while (gateway.isAlive() && System.nanoTime() - deadline < 0);
+        assertTrue(log.contains("WebSocket gateway listening on ws://127.0.0.1:"), log);
+      } finally {
+        gateway.destroy();
+        if (!gateway.waitFor(10, TimeUnit.SECONDS)) {
+          gateway.destroyForcibly();
+          assertTrue(gateway.waitFor(5, TimeUnit.SECONDS), "Gateway did not stop");
+        }
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"--aeron-directory=", "--aeron-directory=   ", "--aeron-directory"})
+  void invalidAeronDirectoriesIdentifyTheirFlag(String argument) {
+    var error = assertThrows(IllegalArgumentException.class,
+        () -> WebSocketGatewayServer.Config.parse(new String[]{argument}));
+    assertTrue(error.getMessage().contains("--aeron-directory"));
+  }
+
   @Test
   void helpPrintsUsageWithoutStartingAeron() throws Exception {
     var output = new ByteArrayOutputStream();

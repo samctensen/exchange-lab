@@ -24,14 +24,15 @@ public final class WebSocketGatewayServer {
             --port=n             Listen port, 0..65535; 0 selects an available port (default: 8080)
             --queue-capacity=n   Maximum queued requests, positive integer (default: 128)
             --max-in-flight=n    Maximum active requests, positive integer (default: 8)
+            --aeron-directory=p  Existing engine Media Driver directory
+                                 (default: java.io.tmpdir/exchange-lab-aeron)
             --help               Print this help and exit; use by itself
           """);
       return;
     }
     Config config = Config.parse(args);
-    String directory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
     Thread shutdownHook = null;
-    try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(directory));
+    try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(config.aeronDirectory()));
         Subscription replies = aeron.addSubscription("aeron:ipc?control-mode=response", 2);
         Publication requests = aeron.addPublication("aeron:ipc?response-correlation-id=" + replies.registrationId(), 1);
         EngineGateway gateway = new EngineGateway(new AeronRequestClient(requests, replies), config.queueCapacity(),
@@ -66,7 +67,11 @@ public final class WebSocketGatewayServer {
     }
   }
 
-  record Config(int port, int queueCapacity, int maxInFlight) {
+  record Config(int port, int queueCapacity, int maxInFlight, String aeronDirectory) {
+    Config(int port, int queueCapacity, int maxInFlight) {
+      this(port, queueCapacity, maxInFlight, defaultAeronDirectory());
+    }
+
     Config {
       if (port < 0 || port > 65535)
         throw new IllegalArgumentException("--port must be between 0 and 65535");
@@ -74,12 +79,20 @@ public final class WebSocketGatewayServer {
         throw new IllegalArgumentException("--queue-capacity must be positive");
       if (maxInFlight < 1)
         throw new IllegalArgumentException("--max-in-flight must be positive");
+      if (aeronDirectory == null || aeronDirectory.isBlank())
+        throw new IllegalArgumentException("--aeron-directory must not be blank");
+      try {
+        Path.of(aeronDirectory);
+      } catch (IllegalArgumentException error) {
+        throw new IllegalArgumentException("--aeron-directory must be a valid path", error);
+      }
     }
 
     static Config parse(String[] args) {
       int port = 8080;
       int queueCapacity = 128;
       int maxInFlight = 8;
+      String aeronDirectory = defaultAeronDirectory();
       var seen = new HashSet<String>();
       for (String arg : args) {
         String[] parts = arg.split("=", 2);
@@ -89,20 +102,30 @@ public final class WebSocketGatewayServer {
           case "--port" -> port = integerValue(parts);
           case "--queue-capacity" -> queueCapacity = integerValue(parts);
           case "--max-in-flight" -> maxInFlight = integerValue(parts);
+          case "--aeron-directory" -> aeronDirectory = argumentValue(parts);
           default -> throw new IllegalArgumentException("Unknown gateway argument: " + parts[0]);
         }
       }
-      return new Config(port, queueCapacity, maxInFlight);
+      return new Config(port, queueCapacity, maxInFlight, aeronDirectory);
     }
 
     private static int integerValue(String[] parts) {
-      if (parts.length != 2)
-        throw new IllegalArgumentException("Expected " + parts[0] + "=n");
+      String value = argumentValue(parts);
       try {
-        return Integer.parseInt(parts[1]);
+        return Integer.parseInt(value);
       } catch (NumberFormatException error) {
-        throw new IllegalArgumentException(parts[0] + " must be a 32-bit integer: " + parts[1], error);
+        throw new IllegalArgumentException(parts[0] + " must be a 32-bit integer: " + value, error);
       }
+    }
+
+    private static String argumentValue(String[] parts) {
+      if (parts.length != 2)
+        throw new IllegalArgumentException("Expected " + parts[0] + "=value");
+      return parts[1];
+    }
+
+    private static String defaultAeronDirectory() {
+      return Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
     }
   }
 }
