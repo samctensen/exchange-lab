@@ -2,12 +2,43 @@ package dev.sam.exchange.gateway;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class WebSocketGatewayServerTest {
+  @Test
+  void helpPrintsUsageWithoutStartingAeron() throws Exception {
+    var output = new ByteArrayOutputStream();
+    PrintStream originalOut = System.out;
+    try (var capture = new PrintStream(output, true, StandardCharsets.UTF_8)) {
+      System.setOut(capture);
+      assertDoesNotThrow(() -> WebSocketGatewayServer.main(new String[]{"--help"}));
+    } finally {
+      System.setOut(originalOut);
+    }
+    String usage = output.toString(StandardCharsets.UTF_8);
+    assertTrue(usage.contains("WebSocketGatewayServer"));
+    assertTrue(usage.contains("--port"));
+    assertTrue(usage.contains("--queue-capacity"));
+    assertTrue(usage.contains("--max-in-flight"));
+    assertTrue(usage.contains("127.0.0.1"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"--port=8080", "--unknown", "--help"})
+  void helpMustBeUsedAlone(String otherArgument) {
+    for (String[] args : new String[][]{{"--help", otherArgument}, {otherArgument, "--help"}}) {
+      var error = assertThrows(IllegalArgumentException.class, () -> WebSocketGatewayServer.main(args));
+      assertTrue(error.getMessage().contains("--help must be used alone"));
+    }
+  }
+
   @ParameterizedTest
   @CsvSource({"-1,128,8,--port", "65536,128,8,--port", "8080,0,8,--queue-capacity",
       "8080,-1,8,--queue-capacity", "8080,128,0,--max-in-flight", "8080,128,-1,--max-in-flight"})

@@ -2,6 +2,7 @@ package dev.sam.exchange.gateway;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.HashSet;
 
 import dev.sam.exchange.transport.AeronRequestClient;
@@ -12,6 +13,21 @@ import io.aeron.Subscription;
 /** Standalone local WebSocket service. Start AeronEngineServer first. */
 public final class WebSocketGatewayServer {
   public static void main(String[] args) throws IOException, InterruptedException {
+    if (Arrays.asList(args).contains("--help")) {
+      if (args.length != 1)
+        throw new IllegalArgumentException("--help must be used alone");
+      System.out.println("""
+          Usage: WebSocketGatewayServer [options]
+          Local demo endpoint: ws://127.0.0.1:8080/orders (no authentication or TLS)
+          Start AeronEngineServer before this gateway.
+
+            --port=n             Listen port, 0..65535; 0 selects an available port (default: 8080)
+            --queue-capacity=n   Maximum queued requests, positive integer (default: 128)
+            --max-in-flight=n    Maximum active requests, positive integer (default: 8)
+            --help               Print this help and exit; use by itself
+          """);
+      return;
+    }
     Config config = Config.parse(args);
     String directory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
     Thread shutdownHook = null;
