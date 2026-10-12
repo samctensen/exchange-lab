@@ -107,6 +107,9 @@ public class AeronLatencyBenchmark {
 
   static Measurement measure(AeronRequestClient client, int count, int maxInFlight, NanoClock clock,
       IdleStrategy idle) {
+    if (count < 0 || maxInFlight < 1) {
+      throw new IllegalArgumentException("Sample count must be non-negative and max in flight must be positive");
+    }
     long[] latencies = new long[count];
     Map<UUID, PendingSample> inFlight = new LinkedHashMap<>();
     SbeRequestCodec codec = new SbeRequestCodec();

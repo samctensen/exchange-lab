@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import dev.sam.exchange.engine.CancelResult;
 import dev.sam.exchange.protocol.SbeRequestCodec;
@@ -28,6 +29,25 @@ import io.aeron.Publication;
 
 @Timeout(5)
 class AeronBenchmarkPipelineTest {
+  @ParameterizedTest
+  @CsvSource({"-1,1", "0,0", "1,0", "1,-1"})
+  void rejectsInvalidMeasurementBoundsBeforeNetworkIo(int count, int window) {
+    ScriptedClient client = new ScriptedClient(100);
+    assertThrows(IllegalArgumentException.class,
+        () -> AeronLatencyBenchmark.measure(client, count, window, new TestClock(), new BusySpinIdleStrategy()));
+    assertEquals(0, client.offers.size());
+    assertEquals(0, client.polls);
+  }
+
+  @Test
+  void permitsZeroWarmupWithoutSendingRequests() {
+    ScriptedClient client = new ScriptedClient(100);
+    var measurement = AeronLatencyBenchmark.measure(client, 0, 1, new TestClock(), new BusySpinIdleStrategy());
+    assertEquals(0, measurement.latencies().length);
+    assertEquals(0, client.offers.size());
+    assertEquals(0, client.polls);
+  }
+
   @Test
   void refillsOneFreedSlotAndTimesOutOfOrderRepliesByUuid() {
     TestClock clock = new TestClock();
