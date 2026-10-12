@@ -95,6 +95,9 @@ mvn spotless:apply   # Format Java sources
 3. Submit JSON orders using [the browser example and contract](docs/websocket-contract.md).
 4. Stop the gateway with **⌃C** before stopping the engine.
 
+See [gateway operations](docs/gateway-operations.md) for launcher help, driver selection,
+timeout/retry settings, and terminal commands.
+
 This endpoint is local-only and has no authentication or TLS. Each gateway has its own
 Aeron response route; use different `--port` values when running multiple gateway instances.
 The engine queues replies separately for each Aeron client connection. A stalled gateway does
@@ -218,7 +221,7 @@ Use a dedicated server with a **new, empty Archive directory for each benchmark 
 3. Run `AeronLatencyBenchmark.main`. Defaults are **500 warmup requests**, **2,000 measured requests**, **one request in flight**, and **sleeping client polling**. Optional program arguments are `warmupCount sampleCount maxInFlight idleMode`, for example `500 2000 8 spin`; warmup may be zero, samples and window size must be positive, and idle mode is `sleep` or `spin`. The window limits outstanding client requests; the engine's log window defaults to eight entries. `sleep` uses `SleepingIdleStrategy`, while `spin` uses `BusySpinIdleStrategy` on the benchmark's polling thread.
 4. Stop the benchmark server with **⌃C** when finished. The benchmark closes its client connections and leaves the server running.
 
-The server accepts `--log-window=<positive integer>` to configure how many offered requests can await recording/execution. For example, server arguments `data/latency-run-16 --quiet --log-window=16` pair with benchmark arguments `500 2000 16 sleep`. Startup prints the selected engine window. This bound is independent of the client's outstanding-request limit and the WebSocket gateway's eight active requests. The default remains eight; increasing it permits more queued work but does not add engine threads or change Archive's file/catalog sync levels (both remain 2). The engine executes recorded requests in FIFO order and blocks admission while a reply is unsent.
+The server accepts `--log-window=<positive integer>` to configure how many offered requests can await recording/execution. For example, server arguments `data/latency-run-16 --quiet --log-window=16` pair with benchmark arguments `500 2000 16 sleep`. Startup prints the selected engine window. This bound is independent of the client's outstanding-request limit and the WebSocket gateway's eight active requests. The default remains eight; increasing it permits more queued work but does not add engine threads or change Archive's file/catalog sync levels (both remain 2). The engine executes recorded requests in FIFO order while unsent replies wait in separate bounded queues per client connection.
 
 For an engine-only comparison, hold the client at `32` and test engine windows `8`, `16`, and `32`. Matching both windows at each value instead measures three different concurrency levels. Requests waiting in inbound IPC before engine admission contribute to client latency but are outside server stage timing.
 
@@ -356,7 +359,7 @@ Code lives under `src/main/java/dev/sam/exchange`:
 - `transport`: Aeron demos, reusable `AeronRequestClient`, request/response codecs, request deduplication, and request recovery.
 - `gateway`: bounded `EngineGateway`, strict JSON/domain mapping, Netty WebSocket handling, and the standalone gateway launcher. The browser contract is documented in `docs/websocket-contract.md`.
 
-`AeronEngineClient.main` creates and closes the Aeron connections, assigns request UUIDs, and prints results. `AeronRequestClient` borrows the publication and subscription and handles encoding, retries, and correlated replies. Use each client instance from one thread, with one request at a time.
+`AeronEngineClient.main` creates and closes the Aeron connections, assigns request UUIDs, and prints results. `AeronRequestClient` borrows the publication and subscription. Its blocking `send()` handles one request at a time; `EngineGateway` and the benchmark use `trySend()` and `pollResponses()` to manage their own in-flight windows. Use each client instance from one thread and one of these ownership models.
 
 `ClientConfig` sets the timeout for each send and reply wait and the maximum number of attempts. Defaults remain five seconds and three attempts. Configuration requires a non-null positive duration and at least one attempt.
 
@@ -365,7 +368,8 @@ Tests mirror these packages under `src/test/java`. Zed and Spotless share Eclips
 ## Current demo limits
 
 - The client grows its request buffer, the server grows its reply buffer, and both receivers reassemble fragmented messages. Messages must still fit within Aeron's maximum message length.
-- The client waits for one request at a time. Each send and reply wait has a five-second deadline by default; send failures still stop the client. Client request IDs are held in memory, so automatic retries apply within the current client run. Server reply-send failures time out after five seconds and currently stop the server.
+- The blocking client handles one request at a time; the WebSocket gateway defaults to eight active requests. Each send and reply wait has a five-second deadline by default; an unanswered request gets up to three total attempts. Client request IDs are held in memory, so applications must persist unresolved requests to retry after their own restart.
+- A server reply expires after five seconds by default and disables only that client's reply route. Other clients and recorded command execution continue. Restart the affected gateway to establish a new Aeron route, then retry the same UUID and command. A browser reconnect alone does not repair that route. Oversized results also need a compatible message/budget limit; reconnecting cannot shrink them.
 - Archive persistence is local to this machine. Tests cover clean restart, abrupt process death, and recorded-but-unapplied recovery, not a physical power-cut or failing disk.
 - The request cache and recording grow without a retention limit. Startup streams the full recording; snapshots and retention are still to come.
 

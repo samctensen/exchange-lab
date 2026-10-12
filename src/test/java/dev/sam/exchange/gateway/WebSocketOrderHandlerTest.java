@@ -9,6 +9,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -22,6 +24,18 @@ import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 
 class WebSocketOrderHandlerTest {
+  @Test
+  void rejectsAMissingSubmissionFunction() {
+    assertThrows(NullPointerException.class, () -> new WebSocketOrderHandler(null, 1));
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {0, -1, Integer.MIN_VALUE})
+  void rejectsNonPositivePendingLimits(int maxPending) {
+    assertThrows(IllegalArgumentException.class,
+        () -> new WebSocketOrderHandler(request -> new CompletableFuture<>(), maxPending));
+  }
+
   @Test
   void completionsAreCorrelatedAndRoutedOnlyToTheirOwnSocket() {
     List<CompletableFuture<CommandResult>> results = new ArrayList<>();
@@ -125,6 +139,55 @@ class WebSocketOrderHandlerTest {
       assertEquals(id(1), reply.get("requestId").getAsString());
       assertTrue(reply.getAsJsonObject("error").get("outcomeUnknown").getAsBoolean());
       assertEquals("UNAVAILABLE", reply.getAsJsonObject("error").get("code").getAsString());
+    } finally {
+      channel.finishAndReleaseAll();
+    }
+  }
+
+  @Test
+  void aFailedCompletionReleasesCapacityForTheNextCommand() {
+    List<CompletableFuture<CommandResult>> results = new ArrayList<>();
+    EmbeddedChannel channel = new EmbeddedChannel(new WebSocketOrderHandler(request -> {
+      var result = new CompletableFuture<CommandResult>();
+      results.add(result);
+      return result;
+    }, 1));
+    try {
+      channel.writeInbound(new TextWebSocketFrame(cancel(1)));
+      channel.writeInbound(new TextWebSocketFrame(cancel(2)));
+      assertEquals("RESOURCE_EXHAUSTED", response(channel).getAsJsonObject("error").get("code").getAsString());
+      results.getFirst().completeExceptionally(new IllegalStateException("lost reply"));
+      channel.runPendingTasks();
+      assertEquals("UNAVAILABLE", response(channel).getAsJsonObject("error").get("code").getAsString());
+      channel.writeInbound(new TextWebSocketFrame(cancel(3)));
+      assertEquals(2, results.size());
+      results.getLast().complete(new CancelResult(3, false));
+      channel.runPendingTasks();
+      var reply = response(channel);
+      assertEquals(id(3), reply.get("requestId").getAsString());
+      assertEquals("3", reply.getAsJsonObject("cancel").get("orderId").getAsString());
+    } finally {
+      channel.finishAndReleaseAll();
+    }
+  }
+
+  @Test
+  void synchronousSubmissionFailureReleasesCapacityForTheNextCommand() {
+    EmbeddedChannel channel = new EmbeddedChannel(new WebSocketOrderHandler(request -> {
+      if (request.command().orderId() == 1)
+        throw new RejectedExecutionException("not running");
+      return CompletableFuture.completedFuture(new CancelResult(request.command().orderId(), false));
+    }, 1));
+    try {
+      channel.writeInbound(new TextWebSocketFrame(cancel(1)));
+      var failure = response(channel);
+      assertEquals("UNAVAILABLE", failure.getAsJsonObject("error").get("code").getAsString());
+      assertFalse(failure.getAsJsonObject("error").get("outcomeUnknown").getAsBoolean());
+      channel.writeInbound(new TextWebSocketFrame(cancel(2)));
+      channel.runPendingTasks();
+      var reply = response(channel);
+      assertEquals(id(2), reply.get("requestId").getAsString());
+      assertEquals("2", reply.getAsJsonObject("cancel").get("orderId").getAsString());
     } finally {
       channel.finishAndReleaseAll();
     }

@@ -25,6 +25,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpResponseStatus;
@@ -142,13 +143,20 @@ public final class WebSocketGateway implements AutoCloseable {
       HttpResponseStatus failure = null;
       if (!request.decoderResult().isSuccess())
         failure = HttpResponseStatus.BAD_REQUEST;
-      else if (!request.method().equals(HttpMethod.GET) || !request.uri().equals("/orders"))
+      else if (!request.uri().equals("/orders"))
         failure = HttpResponseStatus.NOT_FOUND;
-      else if (!allowedOrigin(request.headers().get(HttpHeaderNames.ORIGIN)))
+      else if (!request.method().equals(HttpMethod.GET))
+        failure = HttpResponseStatus.METHOD_NOT_ALLOWED;
+      else if (request.headers().getAll(HttpHeaderNames.ORIGIN).size() > 1
+          || !allowedOrigin(request.headers().get(HttpHeaderNames.ORIGIN)))
         failure = HttpResponseStatus.FORBIDDEN;
       if (failure != null) {
-        ctx.writeAndFlush(new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, failure))
-            .addListener(ChannelFutureListener.CLOSE);
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, failure);
+        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0).set(HttpHeaderNames.CONNECTION,
+            HttpHeaderValues.CLOSE);
+        if (failure.equals(HttpResponseStatus.METHOD_NOT_ALLOWED))
+          response.headers().set(HttpHeaderNames.ALLOW, HttpMethod.GET.name());
+        ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
       } else {
         ctx.fireChannelRead(request.retain());
       }
@@ -161,8 +169,8 @@ public final class WebSocketGateway implements AutoCloseable {
         URI uri = URI.create(origin);
         return ("http".equals(uri.getScheme()) || "https".equals(uri.getScheme()))
             && ("localhost".equals(uri.getHost()) || "127.0.0.1".equals(uri.getHost())) && uri.getRawUserInfo() == null
-            && uri.getRawQuery() == null && uri.getRawFragment() == null
-            && (uri.getRawPath() == null || uri.getRawPath().isEmpty());
+            && uri.getPort() <= 65535 && !uri.getRawAuthority().endsWith(":") && uri.getRawQuery() == null
+            && uri.getRawFragment() == null && (uri.getRawPath() == null || uri.getRawPath().isEmpty());
       } catch (IllegalArgumentException invalid) {
         return false;
       }

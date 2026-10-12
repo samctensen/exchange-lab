@@ -45,6 +45,10 @@ The IPC arrows use the server-owned Media Driver's shared-memory buffers. The Ar
 
 The WebSocket adapter adds bounded Netty connections and strict JSON conversion. It hands domain commands to the existing gateway and schedules completions back onto each socket's event loop. JSON encoding and socket writes stay off the Aeron worker. Disconnecting a socket does not cancel an accepted command. See [the contract, browser example, and limits](websocket-contract.md).
 
+[Gateway operations](gateway-operations.md) covers driver-directory selection, startup arguments,
+and client timeout/retry controls. These settings affect transport waits; they do not change
+the engine's recording deadlines, reply limits, execution order, or persistence guarantees.
+
 ### The important boundaries
 
 - **Transport:** one `EngineGateway` worker owns `AeronRequestClient.trySend()` and `pollResponses()`. It correlates complete SBE responses with active UUIDs. Each active request owns its encoded bytes, phase, attempt count, and deadline. Fragment assemblers deliver complete messages to the decoders. The latency benchmark also uses the nonblocking methods, with a configurable window and one successful send per request. The blocking `send()` method remains available for callers that wait for one reply at a time.

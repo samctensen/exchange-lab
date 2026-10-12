@@ -18,7 +18,11 @@ public class CommandRequestCodec {
         if (parts.length < 3) {
           throw new IllegalArgumentException("Invalid REQUEST message: " + line);
         }
-        yield new CommandRequest(UUID.fromString(parts[1]), commandCodec.decode(parts[2]));
+        UUID requestId = UUID.fromString(parts[1]);
+        if (!requestId.toString().equalsIgnoreCase(parts[1])) {
+          throw new IllegalArgumentException("requestId must be a full UUID");
+        }
+        yield new CommandRequest(requestId, commandCodec.decode(parts[2]));
       }
       default -> throw new IllegalArgumentException("Unknown message type: " + parts[0]);
     };

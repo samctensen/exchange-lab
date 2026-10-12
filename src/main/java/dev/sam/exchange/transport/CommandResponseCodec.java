@@ -16,7 +16,11 @@ public class CommandResponseCodec {
         if (parts.length < 3) {
           throw new IllegalArgumentException("Invalid RESPONSE message: " + line);
         }
-        yield new CommandResponse(UUID.fromString(parts[1]), resultCodec.decode(parts[2]));
+        UUID requestId = UUID.fromString(parts[1]);
+        if (!requestId.toString().equalsIgnoreCase(parts[1])) {
+          throw new IllegalArgumentException("requestId must be a full UUID");
+        }
+        yield new CommandResponse(requestId, resultCodec.decode(parts[2]));
       }
       default -> throw new IllegalArgumentException("Unknown message type: " + parts[0]);
     };
