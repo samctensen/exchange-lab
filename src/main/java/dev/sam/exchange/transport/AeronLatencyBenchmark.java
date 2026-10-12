@@ -223,6 +223,9 @@ public class AeronLatencyBenchmark {
     }
     long[] sorted = latencies.clone();
     Arrays.sort(sorted);
+    if (sorted[0] < 0) {
+      throw new IllegalArgumentException("Latency samples must not be negative");
+    }
     // Nearest-rank percentiles: the first rank covering at least 50% or 99% of the samples.
     int p50Index = (int) ((sorted.length * 50L + 99) / 100) - 1;
     int p99Index = (int) ((sorted.length * 99L + 99) / 100) - 1;
