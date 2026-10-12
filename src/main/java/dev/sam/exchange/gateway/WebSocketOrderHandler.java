@@ -1,5 +1,6 @@
 package dev.sam.exchange.gateway;
 
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -26,7 +27,9 @@ final class WebSocketOrderHandler extends SimpleChannelInboundHandler<WebSocketF
   private int pending;
 
   WebSocketOrderHandler(Function<CommandRequest, CompletableFuture<CommandResult>> submit, int maxPending) {
-    this.submit = submit;
+    this.submit = Objects.requireNonNull(submit, "submit");
+    if (maxPending <= 0)
+      throw new IllegalArgumentException("maxPending must be positive");
     this.maxPending = maxPending;
   }
 
