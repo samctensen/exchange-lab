@@ -51,6 +51,15 @@ public final class WebSocketGatewayServer {
   }
 
   record Config(int port, int queueCapacity, int maxInFlight) {
+    Config {
+      if (port < 0 || port > 65535)
+        throw new IllegalArgumentException("--port must be between 0 and 65535");
+      if (queueCapacity < 1)
+        throw new IllegalArgumentException("--queue-capacity must be positive");
+      if (maxInFlight < 1)
+        throw new IllegalArgumentException("--max-in-flight must be positive");
+    }
+
     static Config parse(String[] args) {
       int port = 8080;
       int queueCapacity = 128;
@@ -60,19 +69,24 @@ public final class WebSocketGatewayServer {
         String[] parts = arg.split("=", 2);
         if (!seen.add(parts[0]))
           throw new IllegalArgumentException("Duplicate gateway argument: " + parts[0]);
-        if (parts.length != 2)
-          throw new IllegalArgumentException("Expected --port=n, --queue-capacity=n or --max-in-flight=n");
-        int value = Integer.parseInt(parts[1]);
         switch (parts[0]) {
-          case "--port" -> port = value;
-          case "--queue-capacity" -> queueCapacity = value;
-          case "--max-in-flight" -> maxInFlight = value;
+          case "--port" -> port = integerValue(parts);
+          case "--queue-capacity" -> queueCapacity = integerValue(parts);
+          case "--max-in-flight" -> maxInFlight = integerValue(parts);
           default -> throw new IllegalArgumentException("Unknown gateway argument: " + parts[0]);
         }
       }
-      if (port < 0 || port > 65535 || queueCapacity < 1 || maxInFlight < 1)
-        throw new IllegalArgumentException("Port must be 0..65535; queue capacity and max in flight must be positive");
       return new Config(port, queueCapacity, maxInFlight);
+    }
+
+    private static int integerValue(String[] parts) {
+      if (parts.length != 2)
+        throw new IllegalArgumentException("Expected " + parts[0] + "=n");
+      try {
+        return Integer.parseInt(parts[1]);
+      } catch (NumberFormatException error) {
+        throw new IllegalArgumentException(parts[0] + " must be a 32-bit integer: " + parts[1], error);
+      }
     }
   }
 }
