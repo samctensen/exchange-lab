@@ -19,6 +19,19 @@ class CommandRequestCodecTest {
   private final CommandRequestCodec codec = new CommandRequestCodec();
 
   @ParameterizedTest
+  @ValueSource(strings = {"1-1-1-1-1", "550e8400-e29b-41d4-a716-44665544000", "+1-1-1-1-1"})
+  void rejectsUuidAliasesThatDoNotUseTheFullWireFormat(String requestId) {
+    assertThrows(IllegalArgumentException.class, () -> codec.decode("REQUEST," + requestId + ",CANCEL,1"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"550e8400-e29b-41d4-a716-446655440000", "550E8400-E29B-41D4-A716-446655440000",
+      "00000000-0000-0000-0000-000000000000", "ffffffff-ffff-ffff-ffff-ffffffffffff"})
+  void acceptsFullWidthUuidsRegardlessOfHexCase(String requestId) {
+    assertEquals(UUID.fromString(requestId), codec.decode("REQUEST," + requestId + ",CANCEL,1").requestId());
+  }
+
+  @ParameterizedTest
   @MethodSource("validRequests")
   void encodesRequestUsingExpectedWireFormat(CommandRequest request, String encoded) {
     assertEquals(encoded, codec.encode(request));
