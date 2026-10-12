@@ -68,6 +68,20 @@ class WebSocketUpgradeTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({"GET, /wrong, , 404 Not Found", "POST, /orders, , 405 Method Not Allowed",
+      "GET, /orders, Origin: https://example.com, 403 Forbidden",
+      "GET, /orders, Content-Length: invalid, 400 Bad Request"})
+  void rejectedUpgradesDeclareAnEmptyBodyAndCloseTheConnection(String method, String path, String header,
+      String expectedStatus) throws Exception {
+    try (Fixture fixture = new Fixture()) {
+      Response response = response(fixture.server.port(), method, path, header == null ? "" : header + "\r\n");
+      assertEquals("HTTP/1.1 " + expectedStatus, response.status());
+      assertEquals("0", response.headers().get("Content-Length"));
+      assertEquals("close", response.headers().get("Connection"));
+    }
+  }
+
   private static String status(int port, String headers) throws Exception {
     return response(port, "GET", "/orders", headers).status();
   }
@@ -86,6 +100,8 @@ class WebSocketUpgradeTest {
         String[] header = line.split(":", 2);
         responseHeaders.put(header[0], header[1].trim());
       }
+      if (!"HTTP/1.1 101 Switching Protocols".equals(status))
+        assertEquals(-1, reader.read(), "Rejected upgrade must close without sending a response body");
       return new Response(status, responseHeaders);
     }
   }

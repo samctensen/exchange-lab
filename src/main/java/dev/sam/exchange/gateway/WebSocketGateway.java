@@ -25,6 +25,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpResponseStatus;
@@ -151,6 +152,7 @@ public final class WebSocketGateway implements AutoCloseable {
         failure = HttpResponseStatus.FORBIDDEN;
       if (failure != null) {
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, failure);
+        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0).set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
         if (failure.equals(HttpResponseStatus.METHOD_NOT_ALLOWED))
           response.headers().set(HttpHeaderNames.ALLOW, HttpMethod.GET.name());
         ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
