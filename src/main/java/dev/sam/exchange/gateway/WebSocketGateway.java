@@ -162,6 +162,7 @@ public final class WebSocketGateway implements AutoCloseable {
         URI uri = URI.create(origin);
         return ("http".equals(uri.getScheme()) || "https".equals(uri.getScheme()))
             && ("localhost".equals(uri.getHost()) || "127.0.0.1".equals(uri.getHost())) && uri.getRawUserInfo() == null
+            && uri.getPort() <= 65535 && !uri.getRawAuthority().endsWith(":")
             && uri.getRawQuery() == null && uri.getRawFragment() == null
             && (uri.getRawPath() == null || uri.getRawPath().isEmpty());
       } catch (IllegalArgumentException invalid) {

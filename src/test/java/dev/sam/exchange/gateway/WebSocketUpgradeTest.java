@@ -10,6 +10,8 @@ import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import dev.sam.exchange.engine.CancelResult;
 
@@ -22,6 +24,27 @@ class WebSocketUpgradeTest {
     try (Fixture fixture = new Fixture()) {
       assertEquals("HTTP/1.1 403 Forbidden",
           status(fixture.server.port(), "Origin: " + firstOrigin + "\r\norigin: " + secondOrigin + "\r\n"));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"http://localhost:65536", "https://127.0.0.1:65536", "http://localhost:2147483647",
+      "http://localhost:", "https://127.0.0.1:", "http://localhost:-1", "http://localhost:abc",
+      "http://localhost:2147483648"})
+  void rejectsMalformedOriginPorts(String origin) throws Exception {
+    try (Fixture fixture = new Fixture()) {
+      assertEquals("HTTP/1.1 403 Forbidden", status(fixture.server.port(), "Origin: " + origin + "\r\n"));
+    }
+  }
+
+  @ParameterizedTest
+  @NullSource
+  @ValueSource(strings = {"http://localhost", "https://127.0.0.1", "http://localhost:0", "https://localhost:65535",
+      "http://127.0.0.1:0", "https://127.0.0.1:65535"})
+  void acceptsNativeClientsAndValidLocalOriginPorts(String origin) throws Exception {
+    try (Fixture fixture = new Fixture()) {
+      assertEquals("HTTP/1.1 101 Switching Protocols",
+          status(fixture.server.port(), origin == null ? "" : "Origin: " + origin + "\r\n"));
     }
   }
 
