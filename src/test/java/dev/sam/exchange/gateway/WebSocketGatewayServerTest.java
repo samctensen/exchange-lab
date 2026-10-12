@@ -41,8 +41,8 @@ class WebSocketGatewayServerTest {
   void launcherConnectsToTheSelectedAeronDirectory() throws Exception {
     Path driverDirectory = temporaryDirectory.resolve("selected-driver");
     Path output = temporaryDirectory.resolve("gateway.log");
-    try (MediaDriver driver = MediaDriver.launchEmbedded(new MediaDriver.Context()
-        .aeronDirectoryName(driverDirectory.toString()).dirDeleteOnShutdown(true))) {
+    try (MediaDriver driver = MediaDriver.launchEmbedded(
+        new MediaDriver.Context().aeronDirectoryName(driverDirectory.toString()).dirDeleteOnShutdown(true))) {
       Process gateway = startGateway(output, driver.aeronDirectoryName());
       try {
         assertEquals("127.0.0.1", awaitEndpoint(gateway, output).getHost());
@@ -73,10 +73,10 @@ class WebSocketGatewayServerTest {
 
   @Test
   void preservesRetryOptionsInEitherOrder() {
-    var timeoutFirst = assertDoesNotThrow(() -> WebSocketGatewayServer.Config
-        .parse(new String[]{"--timeout-ms=17", "--max-attempts=2"}));
-    var attemptsFirst = assertDoesNotThrow(() -> WebSocketGatewayServer.Config
-        .parse(new String[]{"--max-attempts=2", "--timeout-ms=17"}));
+    var timeoutFirst = assertDoesNotThrow(
+        () -> WebSocketGatewayServer.Config.parse(new String[]{"--timeout-ms=17", "--max-attempts=2"}));
+    var attemptsFirst = assertDoesNotThrow(
+        () -> WebSocketGatewayServer.Config.parse(new String[]{"--max-attempts=2", "--timeout-ms=17"}));
     assertEquals(Duration.ofMillis(17), timeoutFirst.clientConfig().timeout());
     assertEquals(2, timeoutFirst.clientConfig().maxAttempts());
     assertEquals(timeoutFirst, attemptsFirst);
@@ -106,8 +106,9 @@ class WebSocketGatewayServerTest {
 
   private void assertTimedOutRequestAttempts(int expectedAttempts, String... arguments) throws Exception {
     Path output = temporaryDirectory.resolve("gateway-timeout.log");
-    try (MediaDriver driver = MediaDriver.launchEmbedded(new MediaDriver.Context()
-        .aeronDirectoryName(temporaryDirectory.resolve("timeout-driver").toString()).dirDeleteOnShutdown(true));
+    try (
+        MediaDriver driver = MediaDriver.launchEmbedded(new MediaDriver.Context()
+            .aeronDirectoryName(temporaryDirectory.resolve("timeout-driver").toString()).dirDeleteOnShutdown(true));
         Aeron engine = Aeron.connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()));
         Subscription requests = engine.addSubscription("aeron:ipc", 1);
         HttpClient http = HttpClient.newHttpClient()) {
@@ -149,6 +150,13 @@ class WebSocketGatewayServerTest {
         } while (System.nanoTime() - deadline < 0);
         assertNotNull(response, "Configured timeout did not complete the request within three seconds");
         assertTrue(response.contains("\"outcomeUnknown\":true"), response);
+        // The WebSocket timeout can arrive while the final retry is still waiting to be polled.
+        long drainDeadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
+        while (received.size() < expectedAttempts && System.nanoTime() - drainDeadline < 0) {
+          requests.poll((buffer, offset, length, header) -> received.add(codec.decode(buffer, offset, length)), 10);
+          if (received.size() < expectedAttempts)
+            Thread.sleep(1);
+        }
         var expected = new CommandRequest(UUID.fromString("11111111-1111-4111-8111-111111111111"), new CancelOrder(1));
         assertEquals(Collections.nCopies(expectedAttempts, expected), received);
       } finally {
@@ -229,8 +237,8 @@ class WebSocketGatewayServerTest {
   }
 
   @ParameterizedTest
-  @CsvSource({"-1,128,8,--port", "65536,128,8,--port", "8080,0,8,--queue-capacity",
-      "8080,-1,8,--queue-capacity", "8080,128,0,--max-in-flight", "8080,128,-1,--max-in-flight"})
+  @CsvSource({"-1,128,8,--port", "65536,128,8,--port", "8080,0,8,--queue-capacity", "8080,-1,8,--queue-capacity",
+      "8080,128,0,--max-in-flight", "8080,128,-1,--max-in-flight"})
   void directConfigConstructionRejectsInvalidLimits(int port, int queueCapacity, int maxInFlight, String flag) {
     var error = assertThrows(IllegalArgumentException.class,
         () -> new WebSocketGatewayServer.Config(port, queueCapacity, maxInFlight));

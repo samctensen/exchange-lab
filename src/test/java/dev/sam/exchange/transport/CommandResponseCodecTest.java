@@ -32,7 +32,8 @@ class CommandResponseCodecTest {
   @ValueSource(strings = {"550e8400-e29b-41d4-a716-446655440000", "550E8400-E29B-41D4-A716-446655440000",
       "00000000-0000-0000-0000-000000000000", "ffffffff-ffff-ffff-ffff-ffffffffffff"})
   void acceptsFullWidthUuidsRegardlessOfHexCase(String requestId) {
-    assertEquals(UUID.fromString(requestId), codec.decode("RESPONSE," + requestId + ",CANCEL_RESULT,1,false").requestId());
+    assertEquals(UUID.fromString(requestId),
+        codec.decode("RESPONSE," + requestId + ",CANCEL_RESULT,1,false").requestId());
   }
 
   @ParameterizedTest

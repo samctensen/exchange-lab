@@ -152,7 +152,8 @@ public final class WebSocketGateway implements AutoCloseable {
         failure = HttpResponseStatus.FORBIDDEN;
       if (failure != null) {
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, failure);
-        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0).set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
+        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0).set(HttpHeaderNames.CONNECTION,
+            HttpHeaderValues.CLOSE);
         if (failure.equals(HttpResponseStatus.METHOD_NOT_ALLOWED))
           response.headers().set(HttpHeaderNames.ALLOW, HttpMethod.GET.name());
         ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
@@ -168,9 +169,8 @@ public final class WebSocketGateway implements AutoCloseable {
         URI uri = URI.create(origin);
         return ("http".equals(uri.getScheme()) || "https".equals(uri.getScheme()))
             && ("localhost".equals(uri.getHost()) || "127.0.0.1".equals(uri.getHost())) && uri.getRawUserInfo() == null
-            && uri.getPort() <= 65535 && !uri.getRawAuthority().endsWith(":")
-            && uri.getRawQuery() == null && uri.getRawFragment() == null
-            && (uri.getRawPath() == null || uri.getRawPath().isEmpty());
+            && uri.getPort() <= 65535 && !uri.getRawAuthority().endsWith(":") && uri.getRawQuery() == null
+            && uri.getRawFragment() == null && (uri.getRawPath() == null || uri.getRawPath().isEmpty());
       } catch (IllegalArgumentException invalid) {
         return false;
       }

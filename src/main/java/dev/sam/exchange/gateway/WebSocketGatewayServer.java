@@ -39,8 +39,8 @@ public final class WebSocketGatewayServer {
     try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(config.aeronDirectory()));
         Subscription replies = aeron.addSubscription("aeron:ipc?control-mode=response", 2);
         Publication requests = aeron.addPublication("aeron:ipc?response-correlation-id=" + replies.registrationId(), 1);
-        EngineGateway gateway = new EngineGateway(new AeronRequestClient(requests, replies, config.clientConfig()), config.queueCapacity(),
-            config.maxInFlight());
+        EngineGateway gateway = new EngineGateway(new AeronRequestClient(requests, replies, config.clientConfig()),
+            config.queueCapacity(), config.maxInFlight());
         WebSocketGateway server = new WebSocketGateway(gateway, config.port())) {
       gateway.start();
       server.start();
@@ -120,8 +120,7 @@ public final class WebSocketGatewayServer {
           default -> throw new IllegalArgumentException("Unknown gateway argument: " + parts[0]);
         }
       }
-      return new Config(port, queueCapacity, maxInFlight, aeronDirectory,
-          new ClientConfig(timeout, maxAttempts));
+      return new Config(port, queueCapacity, maxInFlight, aeronDirectory, new ClientConfig(timeout, maxAttempts));
     }
 
     private static Duration timeoutValue(String[] parts) {
