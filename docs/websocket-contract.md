@@ -19,13 +19,15 @@ flowchart LR
 3. Connect a WebSocket client to the URL above. A `ws://` URL cannot be opened as a webpage in the browser address bar; use JavaScript's `WebSocket` API as shown below. Browser pages must be served from `http://localhost:<port>` or `http://127.0.0.1:<port>` (HTTPS origins on those hosts are also allowed). Other browser origins, including `file://`/`null`, are rejected. Native clients may omit Origin.
 4. Stop the gateway with **⌃C** before stopping the engine. Accepted commands drain through the gateway even though its sockets close.
 
-The launchers share the engine's local Media Driver and must use the same `java.io.tmpdir`. Keep the existing `--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED` JVM setting. Optional gateway arguments:
+The launchers share the engine's local Media Driver. By default they use the same `java.io.tmpdir`; `--aeron-directory` can point the gateway at that driver's directory explicitly. This still requires the same machine. Keep the existing `--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED` JVM setting. Optional gateway arguments:
 
 ```text
 --port=8080 --queue-capacity=128 --max-in-flight=8
 ```
 
-Run one gateway instance for this lesson; isolated routing between multiple instances is the next lesson. The previous gRPC service, client, and protobuf definitions have been removed.
+Multiple gateway instances can share the engine with different `--port` values. Each has its own Aeron reply route and bounded engine reply queue. See [gateway operations](gateway-operations.md) for all launcher flags, retry settings, and troubleshooting. The previous gRPC service, client, and protobuf definitions have been removed.
+
+The upgrade path must be exactly `/orders`. Other paths return HTTP 404; methods other than GET at `/orders` return 405 with `Allow: GET`. Repeated Origin headers and malformed or nonlocal origins return 403. Guard-generated errors have an empty body and close the HTTP connection before any command is admitted.
 
 ## Submit a command
 
@@ -140,4 +142,4 @@ Each socket's Netty event loop handles JSON and socket writes. The Aeron worker 
 
 This is loopback-only plaintext `ws`. The local Origin guard reduces accidental cross-site access; it is not authentication. Commands still have no account identity or ownership checks. Do not expose this demo endpoint publicly.
 
-Production needs TLS/WSS, authenticated sessions, account ownership and risk checks, deliberate browser-origin policy, rate limits, and an event/query path for reconciliation. Multiple gateways also need isolated reply routing and scoped request identities. Those features, Aeron Cluster, and a WebSocket-versus-gRPC latency benchmark are outside this first slice.
+Production needs TLS/WSS, authenticated sessions, account ownership and risk checks, deliberate browser-origin policy, rate limits, and an event/query path for reconciliation. Reply routing already isolates local gateway instances. Request UUIDs remain global to this engine's cache; account-scoped identity and authorization need an explicit design. Aeron Cluster and automatic gateway reconnection remain future work.
