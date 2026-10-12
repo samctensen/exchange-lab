@@ -7,8 +7,22 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class PlaceResultTest {
+
+  @ParameterizedTest
+  @ValueSource(longs = {-1, Long.MIN_VALUE})
+  void rejectsNegativeRemainingLots(long remainingLots) {
+    assertThrows(IllegalArgumentException.class, () -> new PlaceResult(1, List.of(), remainingLots));
+  }
+
+  @Test
+  void allowsFullyFilledAndMaximumSizeResults() {
+    assertEquals(0, new PlaceResult(Long.MIN_VALUE, List.of(), 0).remainingLots());
+    assertEquals(Long.MAX_VALUE, new PlaceResult(Long.MAX_VALUE, List.of(), Long.MAX_VALUE).remainingLots());
+  }
 
   @Test
   void retainsTradesWhenSourceListChanges() {
