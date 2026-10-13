@@ -3,6 +3,8 @@ package dev.sam.exchange.gateway;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -87,7 +89,16 @@ class EngineGatewayShutdownTest {
       assertFalse(queuedFailure.getMessage().contains("outcome unknown"));
       callback.get(3, TimeUnit.SECONDS);
       if (throwFailure) {
-        assertEquals("Simulated transport failure", workerFailure.get(3, TimeUnit.SECONDS).getMessage());
+        Throwable original = workerFailure.get(3, TimeUnit.SECONDS);
+        assertEquals("Simulated transport failure", original.getMessage());
+        assertSame(original, sentFailure.getCause());
+        assertSame(original, unsentFailure.getCause());
+        assertSame(original, queuedFailure.getCause());
+        assertSame(original, failureOf(gateway.submit(request(5))).getCause());
+      } else {
+        assertNull(sentFailure.getCause());
+        assertNull(unsentFailure.getCause());
+        assertNull(queuedFailure.getCause());
       }
     } finally {
       startPolling.countDown();
