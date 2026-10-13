@@ -107,6 +107,21 @@ A timeout, lost connection, or shutdown does not cancel an accepted order. An
 UUID represents a new request and can execute again. Even `--max-attempts=1` can
 leave an unknown outcome; it only limits automatic retries.
 
+### Embedded gateway lifecycle
+
+Code that embeds `EngineGateway` must keep its borrowed Aeron client, publication,
+and subscription open until `gateway.close()` finishes. Close stops admission and
+waits for the worker to drain accepted requests. If the closing thread is
+interrupted, it still waits for the worker to finish, then restores the interrupt
+flag and throws `IllegalStateException` with the interruption as its cause. This
+keeps try-with-resources from closing Aeron beneath an active worker.
+
+An unexpected worker failure completes all active and queued request futures
+exceptionally. Their exceptions retain the original failure as the cause; later
+submissions are rejected with that same cause. Check the exception chain in Java
+logs when diagnosing transport failures. These diagnostics do not change the
+WebSocket error contract or make an uncertain order safe to submit under a new UUID.
+
 ## Common startup and request problems
 
 | Symptom | Check |
