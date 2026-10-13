@@ -4,16 +4,21 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.stream.Stream;
 
 import org.agrona.ExpandableArrayBuffer;
 import org.agrona.concurrent.UnsafeBuffer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import dev.sam.exchange.engine.CancelOrder;
+import dev.sam.exchange.engine.EngineCommand;
 import dev.sam.exchange.engine.PlaceOrder;
 import dev.sam.exchange.engine.Side;
 
@@ -26,6 +31,97 @@ class SbeCommandCodecTest {
   private static final byte[] CANCEL_MESSAGE = HexFormat.of().parseHex("0800020001000000" + "2a00000000000000");
 
   private final SbeCommandCodec codec = new SbeCommandCodec();
+
+  @ParameterizedTest
+  @MethodSource("commands")
+  void rejectsEveryTruncatedDestinationWithoutChangingAnyBytes(EngineCommand command, byte[] expected) {
+    for (int offset : new int[]{0, 7}) {
+      for (int available = 0; available < expected.length; available++) {
+        byte[] bytes = new byte[offset + available];
+        Arrays.fill(bytes, (byte) 0x55);
+        byte[] original = bytes.clone();
+
+        assertThrows(IndexOutOfBoundsException.class, () -> codec.encode(command, new UnsafeBuffer(bytes), offset));
+
+        assertArrayEquals(original, bytes, "offset=" + offset + ", available=" + available);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @MethodSource("commands")
+  void rejectsInvalidOffsetsWithoutChangingAnyBytes(EngineCommand command, byte[] expected) {
+    for (int offset : new int[]{-1, Integer.MIN_VALUE, Integer.MAX_VALUE - expected.length + 1, Integer.MAX_VALUE}) {
+      byte[] bytes = new byte[64];
+      Arrays.fill(bytes, (byte) 0x55);
+      byte[] original = bytes.clone();
+
+      assertThrows(IndexOutOfBoundsException.class, () -> codec.encode(command, new UnsafeBuffer(bytes), offset));
+
+      assertArrayEquals(original, bytes);
+    }
+  }
+
+  @ParameterizedTest
+  @MethodSource("commands")
+  void reportsTheCompleteFrameLength(EngineCommand command, byte[] expected) {
+    assertEquals(expected.length, codec.encodedLength(command));
+  }
+
+  @ParameterizedTest
+  @MethodSource("commands")
+  void rejectsInvalidOffsetsWithoutGrowingAnExpandableBuffer(EngineCommand command, byte[] expected) {
+    for (int offset : new int[]{-1, Integer.MIN_VALUE, Integer.MAX_VALUE - expected.length + 1, Integer.MAX_VALUE}) {
+      ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(7);
+      buffer.setMemory(0, 7, (byte) 0x55);
+
+      assertThrows(IndexOutOfBoundsException.class, () -> codec.encode(command, buffer, offset));
+
+      assertEquals(7, buffer.capacity());
+      for (int i = 0; i < 7; i++) {
+        assertEquals((byte) 0x55, buffer.getByte(i));
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @MethodSource("commands")
+  void encodesIntoAnExactlySizedFixedBuffer(EngineCommand command, byte[] expected) {
+    for (int offset : new int[]{0, 7}) {
+      byte[] bytes = new byte[offset + expected.length];
+      Arrays.fill(bytes, (byte) 0x55);
+
+      int length = codec.encode(command, new UnsafeBuffer(bytes), offset);
+
+      assertEquals(expected.length, length);
+      assertArrayEquals(expected, Arrays.copyOfRange(bytes, offset, bytes.length));
+      for (int i = 0; i < offset; i++) {
+        assertEquals((byte) 0x55, bytes[i]);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @MethodSource("commands")
+  void growsAnExpandableBufferForTheCompleteFrame(EngineCommand command, byte[] expected) {
+    ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(7);
+    buffer.setMemory(0, 7, (byte) 0x55);
+
+    int length = codec.encode(command, buffer, 7);
+
+    assertEquals(expected.length, length);
+    byte[] encoded = new byte[length];
+    buffer.getBytes(7, encoded);
+    assertArrayEquals(expected, encoded);
+    for (int i = 0; i < 7; i++) {
+      assertEquals((byte) 0x55, buffer.getByte(i));
+    }
+  }
+
+  private static Stream<Arguments> commands() {
+    return Stream.of(Arguments.of(new PlaceOrder(42L, Side.ASK, 12345L, 7L), ASK_MESSAGE),
+        Arguments.of(new CancelOrder(42L), CANCEL_MESSAGE));
+  }
 
   @Test
   void encodesTheHeaderAndFieldsAtTheRequestedOffset() {

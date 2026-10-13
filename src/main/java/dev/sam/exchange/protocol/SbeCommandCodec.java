@@ -24,7 +24,22 @@ public class SbeCommandCodec {
   private final PlaceOrderDecoder placeDecoder = new PlaceOrderDecoder();
   private final CancelOrderDecoder cancelDecoder = new CancelOrderDecoder();
 
+  /** Returns the complete frame size without encoding. */
+  public int encodedLength(EngineCommand command) {
+    int bodyLength = switch (command) {
+      case PlaceOrder ignored -> PlaceOrderEncoder.BLOCK_LENGTH;
+      case CancelOrder ignored -> CancelOrderEncoder.BLOCK_LENGTH;
+    };
+    return MessageHeaderEncoder.ENCODED_LENGTH + bodyLength;
+  }
+
   public int encode(EngineCommand command, MutableDirectBuffer buffer, int offset) {
+    int length = encodedLength(command);
+    if (offset < 0 || offset > Integer.MAX_VALUE - length) {
+      throw new IndexOutOfBoundsException("Invalid SBE message bounds");
+    }
+    buffer.checkLimit(offset + length);
+
     // Write the standard SBE header, then wrap the encoder around the body immediately after it.
     return switch (command) {
       case PlaceOrder order -> {
