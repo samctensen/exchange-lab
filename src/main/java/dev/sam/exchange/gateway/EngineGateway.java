@@ -28,6 +28,7 @@ public class EngineGateway implements AutoCloseable {
   private final ArrayBlockingQueue<PendingRequest> requests;
   private volatile State state = State.NEW;
   private final Object lifecycleLock = new Object();
+  private Throwable workerFailure; // Guarded by lifecycleLock, along with admission.
   private final Map<UUID, InFlightRequest> inFlight = new LinkedHashMap<>();
   private final int maxInFlight;
   private final SbeRequestCodec requestCodec = new SbeRequestCodec();
@@ -38,10 +39,13 @@ public class EngineGateway implements AutoCloseable {
   }
 
   EngineGateway(AeronRequestClient client, int capacity, int maxInFlight, GatewayDiagnostics diagnostics) {
+    if (capacity < 1) {
+      throw new IllegalArgumentException("capacity must be at least 1");
+    }
     if (maxInFlight < 1) {
       throw new IllegalArgumentException("maxInFlight must be at least 1");
     }
-    this.client = client;
+    this.client = java.util.Objects.requireNonNull(client, "client");
     this.requests = new ArrayBlockingQueue<>(capacity);
     this.maxInFlight = maxInFlight;
     this.diagnostics = diagnostics;
@@ -62,7 +66,7 @@ public class EngineGateway implements AutoCloseable {
     // Admission and shutdown share a lock: a request is either accepted before close or rejected.
     synchronized (lifecycleLock) {
       if (state != State.RUNNING) {
-        rejection = new RejectedExecutionException("Gateway is not running");
+        rejection = new RejectedExecutionException("Gateway is not running", workerFailure);
       } else if (!requests.offer(pendingRequest)) {
         rejection = new GatewayOverloadedException("request queue is full");
         if (diagnostics != null)
@@ -79,6 +83,7 @@ public class EngineGateway implements AutoCloseable {
   }
 
   private void runWorker() {
+    Throwable failure = null;
     try {
       ClientConfig config = client.config();
       long timeoutNanos = config.timeout().toNanos();
@@ -91,8 +96,12 @@ public class EngineGateway implements AutoCloseable {
 
         idle.idle(work);
       }
+    } catch (RuntimeException | Error error) {
+      failure = error;
+      throw error;
     } finally {
       synchronized (lifecycleLock) {
+        workerFailure = failure;
         state = State.CLOSED;
       }
       var iterator = inFlight.values().iterator();
@@ -102,11 +111,11 @@ public class EngineGateway implements AutoCloseable {
         iterator.remove();
         String message = "Gateway worker stopped; request " + active.pending.request().requestId()
             + (active.attempts > 0 ? "; outcome unknown" : "");
-        active.pending.result().completeExceptionally(new IllegalStateException(message));
+        active.pending.result().completeExceptionally(new IllegalStateException(message, failure));
       }
       PendingRequest pending;
       while ((pending = requests.poll()) != null) {
-        pending.result().completeExceptionally(new IllegalStateException("Gateway worker stopped"));
+        pending.result().completeExceptionally(new IllegalStateException("Gateway worker stopped", failure));
       }
     }
   }
@@ -137,11 +146,21 @@ public class EngineGateway implements AutoCloseable {
     }
     // Join outside the lock: the worker needs it to mark itself CLOSED in its finally block.
     // Even a repeated close waits for any cleanup still in progress.
-    try {
-      worker.join();
-    } catch (InterruptedException e) {
+    InterruptedException interruption = null;
+    for (;;) {
+      try {
+        worker.join();
+        break;
+      } catch (InterruptedException e) {
+        if (interruption == null) {
+          interruption = e;
+        }
+        // Keep the borrowed Aeron resources alive until the worker has finished using them.
+      }
+    }
+    if (interruption != null) {
       Thread.currentThread().interrupt();
-      throw new IllegalStateException("Interrupted while waiting for gateway worker to stop", e);
+      throw new IllegalStateException("Interrupted while waiting for gateway worker to stop", interruption);
     }
   }
 

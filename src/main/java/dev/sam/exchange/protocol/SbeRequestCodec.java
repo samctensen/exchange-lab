@@ -26,7 +26,22 @@ public class SbeRequestCodec {
   private final PlaceOrderRequestDecoder placeDecoder = new PlaceOrderRequestDecoder();
   private final CancelOrderRequestDecoder cancelDecoder = new CancelOrderRequestDecoder();
 
+  /** Returns the complete frame size without encoding. */
+  public int encodedLength(CommandRequest request) {
+    int bodyLength = switch (request.command()) {
+      case PlaceOrder ignored -> PlaceOrderRequestEncoder.BLOCK_LENGTH;
+      case CancelOrder ignored -> CancelOrderRequestEncoder.BLOCK_LENGTH;
+    };
+    return MessageHeaderEncoder.ENCODED_LENGTH + bodyLength;
+  }
+
   public int encode(CommandRequest request, MutableDirectBuffer buffer, int offset) {
+    int length = encodedLength(request);
+    if (offset < 0 || offset > Integer.MAX_VALUE - length) {
+      throw new IndexOutOfBoundsException("Invalid SBE message bounds");
+    }
+    buffer.checkLimit(offset + length);
+
     long mostBits = request.requestId().getMostSignificantBits();
     long leastBits = request.requestId().getLeastSignificantBits();
 

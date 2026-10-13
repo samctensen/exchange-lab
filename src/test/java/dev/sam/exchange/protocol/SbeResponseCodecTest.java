@@ -90,6 +90,92 @@ class SbeResponseCodecTest {
     assertEquals((byte) 0x55, buffer.getByte(7 + length));
   }
 
+  @ParameterizedTest
+  @MethodSource({"wireMessages", "placeWireMessages"})
+  void rejectsEveryTruncatedDestinationWithoutChangingAnyBytes(CommandResponse response, byte[] expected) {
+    for (int offset : new int[]{0, 7}) {
+      for (int available = 0; available < expected.length; available++) {
+        byte[] bytes = new byte[offset + available];
+        Arrays.fill(bytes, (byte) 0x55);
+        byte[] original = bytes.clone();
+
+        assertThrows(IndexOutOfBoundsException.class, () -> codec.encode(response, new UnsafeBuffer(bytes), offset));
+
+        assertArrayEquals(original, bytes, "offset=" + offset + ", available=" + available);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @MethodSource({"wireMessages", "placeWireMessages"})
+  void rejectsInvalidOffsetsWithoutChangingAnyBytes(CommandResponse response, byte[] expected) {
+    for (int offset : new int[]{-1, Integer.MIN_VALUE, Integer.MAX_VALUE - expected.length + 1, Integer.MAX_VALUE}) {
+      byte[] bytes = new byte[64];
+      Arrays.fill(bytes, (byte) 0x55);
+      byte[] original = bytes.clone();
+
+      assertThrows(IndexOutOfBoundsException.class, () -> codec.encode(response, new UnsafeBuffer(bytes), offset));
+
+      assertArrayEquals(original, bytes);
+    }
+  }
+
+  @ParameterizedTest
+  @MethodSource({"wireMessages", "placeWireMessages"})
+  void reportsTheCompleteFrameLength(CommandResponse response, byte[] expected) {
+    assertEquals(expected.length, codec.encodedLength(response));
+  }
+
+  @ParameterizedTest
+  @MethodSource({"wireMessages", "placeWireMessages"})
+  void encodesIntoAnExactlySizedFixedBuffer(CommandResponse response, byte[] expected) {
+    for (int offset : new int[]{0, 7}) {
+      byte[] bytes = new byte[offset + expected.length];
+      Arrays.fill(bytes, (byte) 0x55);
+
+      int length = codec.encode(response, new UnsafeBuffer(bytes), offset);
+
+      assertEquals(expected.length, length);
+      assertArrayEquals(expected, Arrays.copyOfRange(bytes, offset, bytes.length));
+      for (int i = 0; i < offset; i++) {
+        assertEquals((byte) 0x55, bytes[i]);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @MethodSource({"wireMessages", "placeWireMessages"})
+  void growsAnExpandableBufferForTheCompleteFrame(CommandResponse response, byte[] expected) {
+    ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(7);
+    buffer.setMemory(0, 7, (byte) 0x55);
+
+    int length = codec.encode(response, buffer, 7);
+
+    assertEquals(expected.length, length);
+    byte[] encoded = new byte[length];
+    buffer.getBytes(7, encoded);
+    assertArrayEquals(expected, encoded);
+    for (int i = 0; i < 7; i++) {
+      assertEquals((byte) 0x55, buffer.getByte(i));
+    }
+  }
+
+  @ParameterizedTest
+  @MethodSource({"wireMessages", "placeWireMessages"})
+  void rejectsInvalidOffsetsWithoutGrowingAnExpandableBuffer(CommandResponse response, byte[] expected) {
+    for (int offset : new int[]{-1, Integer.MIN_VALUE, Integer.MAX_VALUE - expected.length + 1, Integer.MAX_VALUE}) {
+      ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(7);
+      buffer.setMemory(0, 7, (byte) 0x55);
+
+      assertThrows(IndexOutOfBoundsException.class, () -> codec.encode(response, buffer, offset));
+
+      assertEquals(7, buffer.capacity());
+      for (int i = 0; i < 7; i++) {
+        assertEquals((byte) 0x55, buffer.getByte(i));
+      }
+    }
+  }
+
   @Test
   void resetsTradeCountAndLengthWhenReusingEncoder() {
     ExpandableArrayBuffer first = new ExpandableArrayBuffer(128);
