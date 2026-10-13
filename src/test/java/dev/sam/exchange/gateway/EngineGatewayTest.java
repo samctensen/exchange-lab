@@ -18,6 +18,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
@@ -329,8 +330,9 @@ class EngineGatewayTest {
     }
   }
 
-  @Test
-  void interruptedCloserPreservesItsInterruptAndWorkerStillDrains() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void interruptedCloserWaitsForDrainBeforeReportingItsInterrupt(boolean interruptedBeforeClose) throws Exception {
     CountDownLatch entered = new CountDownLatch(1);
     CountDownLatch release = new CountDownLatch(1);
     EngineGateway gateway = blockedGateway(2, entered, release);
@@ -342,6 +344,9 @@ class EngineGatewayTest {
       await(entered);
       CompletableFuture<CommandResult> second = gateway.submit(request(2));
       Thread closer = new Thread(() -> {
+        if (interruptedBeforeClose) {
+          Thread.currentThread().interrupt();
+        }
         try {
           gateway.close();
           closeFailure.complete(null);
@@ -351,15 +356,20 @@ class EngineGatewayTest {
         }
       });
       closer.start();
-      awaitWaiting(closer);
-      closer.interrupt();
+      if (!interruptedBeforeClose) {
+        awaitWaiting(closer);
+        closer.interrupt();
+      }
+      // Returning early would let try-with-resources close Aeron beneath the live worker.
+      assertThrows(TimeoutException.class, () -> closeFailure.get(100, TimeUnit.MILLISECONDS));
+      assertRejected(gateway.submit(request(3)));
+      release.countDown();
       Throwable failure = closeFailure.get(3, TimeUnit.SECONDS);
       assertInstanceOf(IllegalStateException.class, failure);
       assertInstanceOf(InterruptedException.class, failure.getCause());
       assertTrue(interrupted.get());
-      assertRejected(gateway.submit(request(3)));
-      release.countDown();
-      gateway.close();
+      assertTrue(first.isDone());
+      assertTrue(second.isDone());
       assertEquals(new CancelResult(1L, false), first.join());
       assertEquals(new CancelResult(2L, false), second.join());
     } finally {

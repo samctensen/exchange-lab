@@ -146,11 +146,21 @@ public class EngineGateway implements AutoCloseable {
     }
     // Join outside the lock: the worker needs it to mark itself CLOSED in its finally block.
     // Even a repeated close waits for any cleanup still in progress.
-    try {
-      worker.join();
-    } catch (InterruptedException e) {
+    InterruptedException interruption = null;
+    for (;;) {
+      try {
+        worker.join();
+        break;
+      } catch (InterruptedException e) {
+        if (interruption == null) {
+          interruption = e;
+        }
+        // Keep the borrowed Aeron resources alive until the worker has finished using them.
+      }
+    }
+    if (interruption != null) {
       Thread.currentThread().interrupt();
-      throw new IllegalStateException("Interrupted while waiting for gateway worker to stop", e);
+      throw new IllegalStateException("Interrupted while waiting for gateway worker to stop", interruption);
     }
   }
 
