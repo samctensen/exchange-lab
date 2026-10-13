@@ -42,6 +42,22 @@ import io.aeron.Publication;
 @Timeout(10)
 class EngineGatewayTest {
   @Test
+  void rejectsMissingClientBeforeStartingAWorker() {
+    var failure = assertThrows(NullPointerException.class, () -> new EngineGateway(null, 1));
+    assertEquals("client", failure.getMessage());
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {0, -1, Integer.MIN_VALUE})
+  void identifiesInvalidAdmissionLimits(int limit) {
+    var client = client(EngineGatewayTest::cancelResult);
+    var capacityFailure = assertThrows(IllegalArgumentException.class, () -> new EngineGateway(client, limit, 1));
+    assertTrue(String.valueOf(capacityFailure.getMessage()).contains("capacity"));
+    var activeFailure = assertThrows(IllegalArgumentException.class, () -> new EngineGateway(client, 1, limit));
+    assertTrue(activeFailure.getMessage().contains("maxInFlight"));
+  }
+
+  @Test
   void rejectsRequestsBeforeStartup() {
     EngineGateway gateway = new EngineGateway(client(EngineGatewayTest::cancelResult), 1);
 

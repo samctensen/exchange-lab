@@ -38,10 +38,13 @@ public class EngineGateway implements AutoCloseable {
   }
 
   EngineGateway(AeronRequestClient client, int capacity, int maxInFlight, GatewayDiagnostics diagnostics) {
+    if (capacity < 1) {
+      throw new IllegalArgumentException("capacity must be at least 1");
+    }
     if (maxInFlight < 1) {
       throw new IllegalArgumentException("maxInFlight must be at least 1");
     }
-    this.client = client;
+    this.client = java.util.Objects.requireNonNull(client, "client");
     this.requests = new ArrayBlockingQueue<>(capacity);
     this.maxInFlight = maxInFlight;
     this.diagnostics = diagnostics;
