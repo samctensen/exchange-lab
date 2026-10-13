@@ -55,7 +55,12 @@ public class SbeResponseCodec {
   }
 
   public int encode(CommandResponse response, MutableDirectBuffer buffer, int offset) {
-    encodedLength(response);
+    int length = encodedLength(response);
+    if (offset < 0 || offset > Integer.MAX_VALUE - length) {
+      throw new IndexOutOfBoundsException("Invalid SBE message bounds");
+    }
+    buffer.checkLimit(offset + length);
+
     long mostBits = response.requestId().getMostSignificantBits();
     long leastBits = response.requestId().getLeastSignificantBits();
 
