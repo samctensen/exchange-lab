@@ -69,7 +69,11 @@ public class AeronRequestClient {
       // A successful offer queues bytes; the server may not have processed the order yet.
       while (true) {
         checkInterrupted(failureContext);
-        offerResult = trySend(buffer, 0, messageLength);
+        try {
+          offerResult = trySend(buffer, 0, messageLength);
+        } catch (ReplySubscriptionClosedException failure) {
+          throw new IllegalStateException(failure.getMessage() + failureContext, failure);
+        }
         if (offerResult >= 0) {
           break;
         }
@@ -96,11 +100,16 @@ public class AeronRequestClient {
 
       while (matchingResults.isEmpty()) {
         checkInterrupted(failureContext);
-        int fragments = pollResponses(response -> {
-          if (request.requestId().equals(response.requestId())) {
-            matchingResults.add(response.result());
-          }
-        }, 1);
+        int fragments;
+        try {
+          fragments = pollResponses(response -> {
+            if (request.requestId().equals(response.requestId())) {
+              matchingResults.add(response.result());
+            }
+          }, 1);
+        } catch (ReplySubscriptionClosedException failure) {
+          throw new IllegalStateException(failure.getMessage() + failureContext, failure);
+        }
 
         if (matchingResults.isEmpty()) {
           checkInterrupted(failureContext);
@@ -126,6 +135,7 @@ public class AeronRequestClient {
   }
 
   public long trySend(DirectBuffer encodedRequest, int offset, int length) {
+    checkRepliesOpen();
     return publication.offer(encodedRequest, offset, length);
   }
 
@@ -134,10 +144,25 @@ public class AeronRequestClient {
     if (fragmentLimit < 0) {
       throw new IllegalArgumentException("fragmentLimit must not be negative");
     }
+    checkRepliesOpen();
     int fragments = replies.poll(replyAssembler, fragmentLimit);
     while (!receivedResponses.isEmpty()) {
       onResponse.accept(receivedResponses.removeFirst());
     }
     return fragments;
+  }
+
+  private void checkRepliesOpen() {
+    if (replies.isClosed()) {
+      throw new ReplySubscriptionClosedException();
+    }
+  }
+
+  private static final class ReplySubscriptionClosedException extends IllegalStateException {
+    private static final long serialVersionUID = 1L;
+
+    private ReplySubscriptionClosedException() {
+      super("Reply subscription is closed");
+    }
   }
 }
