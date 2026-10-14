@@ -54,6 +54,20 @@ class ArchiveRequestLogTest {
   }
 
   @Test
+  void rejectsFailedOffersAsRecordingPositions(@TempDir Path directory) {
+    try (Fixture f = new Fixture(directory); ArchiveRequestLog log = ArchiveRequestLog.open(f.archive, r -> fail())) {
+      for (long position : new long[]{-1L, -2L, Long.MIN_VALUE}) {
+        assertThrows(IllegalArgumentException.class, () -> log.isRecorded(position));
+      }
+      assertTrue(log.isRecorded(0));
+      long position = append(log, request(1, new CancelOrder(1)));
+      assertTrue(log.isRecorded(position));
+      assertFalse(log.isRecorded(position + 32));
+      assertFalse(log.isRecorded(Long.MAX_VALUE));
+    }
+  }
+
+  @Test
   void recoversInOrderAndExtendsTheSameRecordingAcrossRestarts(@TempDir Path directory) {
     CommandRequest bid = request(1, new PlaceOrder(1, Side.BID, 100, 10));
     CommandRequest ask = request(2, new PlaceOrder(2, Side.ASK, 99, 4));

@@ -117,6 +117,9 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
 
   @Override
   public boolean isRecorded(long position) {
+    if (position < 0) {
+      throw new IllegalArgumentException("Recording position must not be negative");
+    }
     ensureActive();
     return counters.getCounterValue(counterId) >= position;
   }
