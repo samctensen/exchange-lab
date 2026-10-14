@@ -24,15 +24,20 @@ its Media Driver and a separate persistent Archive directory:
 ```sh
 mkdir -p /tmp/exchange-lab-demo
 java --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED \
-  -Djava.io.tmpdir=/tmp/exchange-lab-demo \
   -cp "target/classes:$(cat target/runtime-classpath.txt)" \
-  dev.sam.exchange.transport.AeronEngineServer data/demo-archive --quiet
+  dev.sam.exchange.transport.AeronEngineServer data/demo-archive --quiet \
+  --aeron-directory=/tmp/exchange-lab-demo/exchange-lab-aeron
 ```
 
 Wait for `Server ready:`. Reusing `data/demo-archive` recovers the same book and
 request history; choose a new Archive directory for a fresh exchange. Keep the
 Archive outside the disposable Media Driver directory, and run only one engine
 owner for each directory.
+
+The engine rejects a blank Archive argument or driver path before starting
+resources. It also refuses an Archive directory inside the disposable driver
+directory, including paths that resolve there through symlinks. The driver
+directory is removed during normal shutdown; the Archive is retained.
 
 In a second terminal, connect the gateway to that Media Driver:
 
@@ -121,6 +126,24 @@ exceptionally. Their exceptions retain the original failure as the cause; later
 submissions are rejected with that same cause. Check the exception chain in Java
 logs when diagnosing transport failures. These diagnostics do not change the
 WebSocket error contract or make an uncertain order safe to submit under a new UUID.
+
+### Direct Aeron clients
+
+`AeronRequestClient.send` is the blocking helper used by Java demos. Interrupting
+its thread stops waiting and preserves the interrupt flag. Closing its reply
+subscription also ends the wait promptly. Once any attempt has been accepted by
+the publication, either failure reports the request UUID and an unknown outcome.
+Keep that UUID and command for reconciliation; stopping a wait does not cancel
+the order.
+
+The nonblocking `trySend` and `pollResponses` methods reject a closed reply
+subscription. `pollResponses` also rejects a null callback or negative fragment
+limit before consuming replies. A zero limit is valid: it drains only responses
+already decoded into the client's queue, without reading new Aeron fragments.
+
+When embedding `AeronEngineServer.main`, its shutdown hook is removed after main
+returns or startup fails. During JVM shutdown the hook still requests an orderly
+stop and waits for resource cleanup.
 
 ## Common startup and request problems
 
