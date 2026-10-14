@@ -66,7 +66,13 @@ public class AeronRequestClient {
 
       // Retry temporary offer failures until the send deadline.
       // A successful offer queues bytes; the server may not have processed the order yet.
-      while ((offerResult = trySend(buffer, 0, messageLength)) < 0) {
+      while (true) {
+        checkInterrupted(failureContext);
+        offerResult = trySend(buffer, 0, messageLength);
+        if (offerResult >= 0) {
+          break;
+        }
+        checkInterrupted(failureContext);
         // These failures cannot be resolved by retrying.
         if (offerResult == Publication.CLOSED) {
           throw new IllegalStateException("Publication is closed" + failureContext);
@@ -85,16 +91,21 @@ public class AeronRequestClient {
       // Receiving a fragment is not enough: wait for the matching UUID.
       // Unrelated replies do not reset this deadline.
       deadline = System.nanoTime() + this.timeoutNanos;
+      failureContext = "; request " + request.requestId() + "; outcome unknown";
 
       while (matchingResults.isEmpty()) {
+        checkInterrupted(failureContext);
         int fragments = pollResponses(response -> {
           if (request.requestId().equals(response.requestId())) {
             matchingResults.add(response.result());
           }
         }, 1);
 
-        if (matchingResults.isEmpty() && System.nanoTime() - deadline >= 0) {
-          break;
+        if (matchingResults.isEmpty()) {
+          checkInterrupted(failureContext);
+          if (System.nanoTime() - deadline >= 0) {
+            break;
+          }
         }
 
         idle.idle(fragments);
@@ -105,6 +116,12 @@ public class AeronRequestClient {
           "No reply after " + this.maxAttempts + " attempts for request " + request.requestId() + "; outcome unknown");
     }
     return matchingResults.getFirst();
+  }
+
+  private static void checkInterrupted(String failureContext) {
+    if (Thread.currentThread().isInterrupted()) {
+      throw new IllegalStateException("Interrupted while waiting for request completion" + failureContext);
+    }
   }
 
   public long trySend(DirectBuffer encodedRequest, int offset, int length) {
