@@ -4,6 +4,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Consumer;
 
 import org.agrona.DirectBuffer;
@@ -129,6 +130,10 @@ public class AeronRequestClient {
   }
 
   public int pollResponses(Consumer<CommandResponse> onResponse, int fragmentLimit) {
+    Objects.requireNonNull(onResponse, "onResponse must not be null");
+    if (fragmentLimit < 0) {
+      throw new IllegalArgumentException("fragmentLimit must not be negative");
+    }
     int fragments = replies.poll(replyAssembler, fragmentLimit);
     while (!receivedResponses.isEmpty()) {
       onResponse.accept(receivedResponses.removeFirst());
