@@ -1,5 +1,6 @@
 package dev.sam.exchange.transport;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -45,6 +46,24 @@ class EngineServerConfigTest {
   }
 
   @Test
+  void acceptsAeronDirectoryWithoutCreatingIt(@TempDir Path tempDir) {
+    Path driver = tempDir.resolve("custom driver");
+
+    assertDoesNotThrow(() -> EngineServerConfig.parse(new String[]{"--aeron-directory=" + driver}));
+    assertFalse(Files.exists(driver));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"", " ", "\t", " \r\n ", "invalid\u0000path"})
+  void rejectsInvalidAeronDirectoriesWithTheOptionName(String value) {
+    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        () -> EngineServerConfig.parse(new String[]{"--aeron-directory=" + value}));
+
+    assertTrue(error.getMessage().contains("--aeron-directory"), error::getMessage);
+    assertFalse(error.getMessage().contains("Unknown argument"), error::getMessage);
+  }
+
+  @Test
   void acceptsStageTimingAndLogWindowUpperBoundaries() {
     EngineServerConfig config = EngineServerConfig
         .parse(new String[]{"--stage-timing=2147483647,1000000", "--log-window=2147483647"});
@@ -75,7 +94,7 @@ class EngineServerConfigTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"--quiet", "--log-window=4", "--stage-timing=0,1", "--reply-capacity=2", "--reply-bytes=4096",
-      "--reply-timeout-ms=250", "--reply-stats"})
+      "--reply-timeout-ms=250", "--reply-stats", "--aeron-directory=custom-driver"})
   void rejectsDuplicateOptionsWithTheirNames(String option) {
     IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
         () -> EngineServerConfig.parse(new String[]{option, option}));
@@ -118,7 +137,7 @@ class EngineServerConfigTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"--unknown", "--quiet=true", "--log-window", "--stage-timing", "--reply-capacity",
-      "--reply-bytes", "--reply-timeout-ms", "--reply-stats=true"})
+      "--reply-bytes", "--reply-timeout-ms", "--reply-stats=true", "--aeron-directory"})
   void identifiesUnsupportedArgumentsAndShowsUsage(String argument) {
     IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
         () -> EngineServerConfig.parse(new String[]{argument}));
@@ -185,6 +204,8 @@ class EngineServerConfigTest {
       assertEquals(0, server.exitValue(), help);
       assertTrue(help.contains("Usage: AeronEngineServer"), help);
       assertTrue(help.contains("--quiet"), help);
+      assertTrue(help.contains("--aeron-directory=path"), help);
+      assertTrue(help.contains("java.io.tmpdir/exchange-lab-aeron"), help);
       assertTrue(help.contains("--log-window=count"), help);
       assertTrue(help.contains("--stage-timing=warmupCount,sampleCount"), help);
       assertTrue(help.contains("--help"), help);
@@ -216,7 +237,8 @@ class EngineServerConfigTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"--unknown", "--reply-capacity=0", "--reply-bytes=0", "--reply-timeout-ms=9223372036855"})
+  @ValueSource(strings = {"--unknown", "--reply-capacity=0", "--reply-bytes=0", "--reply-timeout-ms=9223372036855",
+      "--aeron-directory=", "--aeron-directory= "})
   @Timeout(10)
   void rejectsLaterInvalidArgumentBeforeAllocatingTimingBuffersOrCreatingResources(String argument,
       @TempDir Path tempDir) throws Exception {

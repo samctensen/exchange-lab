@@ -55,7 +55,7 @@ public class AeronEngineServer {
     RequestStateMachine stateMachine = new RequestStateMachine(new MatchingEngine(new OrderBook()));
 
     // Both processes use this directory to connect to the same media driver.
-    String aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
+    String aeronDirectory = config.aeronDirectory().toString();
 
     // The server owns the driver; resources close in reverse order on exit.
     try (ArchiveRuntime runtime = ArchiveRuntime.launch(archiveDirectory, aeronDirectory);
