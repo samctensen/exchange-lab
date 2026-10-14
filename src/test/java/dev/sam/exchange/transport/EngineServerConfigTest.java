@@ -127,6 +127,41 @@ class EngineServerConfigTest {
     assertTrue(error.getMessage().contains("Usage:"), error::getMessage);
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"", " ", "\t", " \r\n "})
+  void rejectsBlankArchiveDirectories(String archiveDirectory) {
+    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        () -> EngineServerConfig.parse(new String[]{archiveDirectory}));
+
+    assertTrue(error.getMessage().contains("archive directory"), error::getMessage);
+    assertTrue(error.getMessage().contains("blank"), error::getMessage);
+  }
+
+  @Test
+  @Timeout(10)
+  void rejectsBlankArchiveBeforeAllocatingTimingBuffersOrCreatingResources(@TempDir Path tempDir) throws Exception {
+    Path output = tempDir.resolve("startup.log");
+    String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+    Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-Xmx16m",
+        "-Djava.io.tmpdir=" + tempDir, "-cp", classpath, AeronEngineServer.class.getName(), "--stage-timing=0,1000000",
+        "").directory(tempDir.toFile()).redirectErrorStream(true).redirectOutput(output.toFile()).start();
+    try {
+      assertTrue(server.waitFor(5, TimeUnit.SECONDS), "Blank archive argument must exit without starting the server");
+      String error = Files.readString(output);
+      assertTrue(server.exitValue() != 0, error);
+      assertTrue(error.contains("IllegalArgumentException"), error);
+      assertTrue(error.contains("archive directory"), error);
+      assertTrue(error.contains("blank"), error);
+      assertFalse(Files.exists(tempDir.resolve("data")));
+      assertFalse(Files.exists(tempDir.resolve("exchange-lab-aeron")));
+    } finally {
+      if (server.isAlive()) {
+        server.destroyForcibly();
+        server.waitFor(3, TimeUnit.SECONDS);
+      }
+    }
+  }
+
   @Test
   void rejectsMultipleArchiveDirectories() {
     IllegalArgumentException error = assertThrows(IllegalArgumentException.class,

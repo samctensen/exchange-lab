@@ -97,6 +97,9 @@ record EngineServerConfig(Path archiveDirectory, boolean quiet, int logWindow, i
       } else if (archiveDirectory != null) {
         throw new IllegalArgumentException("Only one archive directory is allowed; unexpected argument: " + arg);
       } else {
+        if (arg.isBlank()) {
+          throw new IllegalArgumentException("archive directory must not be blank");
+        }
         archiveDirectory = Path.of(arg);
       }
     }
