@@ -57,6 +57,70 @@ class AeronEngineServerTest {
   }
 
   @Test
+  @Timeout(20)
+  void servesRequestsUsingConfiguredDriverDirectory(@TempDir Path tempDir) throws Exception {
+    Path archiveDirectory = tempDir.resolve("persistent archive");
+    Path driverDirectory = tempDir.resolve("custom driver");
+    Path serverLog = tempDir.resolve("server.log");
+    String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+    Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+        "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Djava.io.tmpdir=" + tempDir, "-cp", classpath,
+        AeronEngineServer.class.getName(), archiveDirectory.toString(), "--aeron-directory=" + driverDirectory)
+        .redirectErrorStream(true).redirectOutput(serverLog.toFile()).start();
+    CommandRequest request = new CommandRequest(new UUID(0L, 1L), new PlaceOrder(1L, Side.BID, 100L, 10L));
+
+    try {
+      awaitServerOutput(server, serverLog, "Server ready: " + driverDirectory);
+      assertTrue(Files.exists(driverDirectory.resolve("cnc.dat")), "Configured driver was not started");
+      assertFalse(Files.exists(tempDir.resolve("exchange-lab-aeron")), "Server also started a default driver");
+      assertEquals(List.of(new PlaceResult(1L, List.of(), 10L)),
+          exchangeRequests(server, serverLog, driverDirectory, List.of(request), false, false));
+
+      server.destroy();
+      assertTrue(server.waitFor(3, TimeUnit.SECONDS), "Server did not stop after the shutdown request");
+      String output = Files.readString(serverLog);
+      assertFalse(output.contains("Exception"), output);
+      assertFalse(output.contains("Server shutdown exceeded"), output);
+      assertFalse(Files.exists(driverDirectory), "Configured driver directory was not removed\n" + output);
+      assertEquals(List.of(request), ArchiveTestSupport.readAll(archiveDirectory));
+    } finally {
+      if (server.isAlive()) {
+        server.destroyForcibly();
+        server.waitFor(3, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"", "archive"})
+  @Timeout(10)
+  void rejectsArchiveWithinConfiguredDriverDirectory(String archiveChild, @TempDir Path tempDir) throws Exception {
+    Path driverDirectory = Files.createDirectory(tempDir.resolve("custom driver"));
+    Path sentinel = driverDirectory.resolve("keep.txt");
+    Files.writeString(sentinel, "keep existing driver contents");
+    Path archiveDirectory = driverDirectory.resolve(archiveChild);
+    Path serverLog = tempDir.resolve("server.log");
+    String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+    Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+        "-Djava.io.tmpdir=" + tempDir, "-cp", classpath, AeronEngineServer.class.getName(), archiveDirectory.toString(),
+        "--aeron-directory=" + driverDirectory).redirectErrorStream(true).redirectOutput(serverLog.toFile()).start();
+    try {
+      assertTrue(server.waitFor(5, TimeUnit.SECONDS), "Unsafe archive directory must fail before driver startup");
+      String output = Files.readString(serverLog);
+      assertTrue(server.exitValue() != 0, output);
+      assertTrue(output.contains("Archive directory must be outside"), output);
+      assertEquals("keep existing driver contents", Files.readString(sentinel));
+      assertFalse(Files.exists(driverDirectory.resolve("cnc.dat")));
+      assertFalse(Files.exists(tempDir.resolve("exchange-lab-aeron")));
+    } finally {
+      if (server.isAlive()) {
+        server.destroyForcibly();
+        server.waitFor(3, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  @Test
   @Timeout(30)
   void rejectsRequestIdConflictAndKeepsServingRequests(@TempDir Path tempDir) throws Exception {
     Path archiveDirectory = tempDir.resolve("archive");

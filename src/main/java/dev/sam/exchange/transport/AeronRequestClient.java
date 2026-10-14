@@ -4,6 +4,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Consumer;
 
 import org.agrona.DirectBuffer;
@@ -66,7 +67,17 @@ public class AeronRequestClient {
 
       // Retry temporary offer failures until the send deadline.
       // A successful offer queues bytes; the server may not have processed the order yet.
-      while ((offerResult = trySend(buffer, 0, messageLength)) < 0) {
+      while (true) {
+        checkInterrupted(failureContext);
+        try {
+          offerResult = trySend(buffer, 0, messageLength);
+        } catch (ReplySubscriptionClosedException failure) {
+          throw new IllegalStateException(failure.getMessage() + failureContext, failure);
+        }
+        if (offerResult >= 0) {
+          break;
+        }
+        checkInterrupted(failureContext);
         // These failures cannot be resolved by retrying.
         if (offerResult == Publication.CLOSED) {
           throw new IllegalStateException("Publication is closed" + failureContext);
@@ -85,16 +96,26 @@ public class AeronRequestClient {
       // Receiving a fragment is not enough: wait for the matching UUID.
       // Unrelated replies do not reset this deadline.
       deadline = System.nanoTime() + this.timeoutNanos;
+      failureContext = "; request " + request.requestId() + "; outcome unknown";
 
       while (matchingResults.isEmpty()) {
-        int fragments = pollResponses(response -> {
-          if (request.requestId().equals(response.requestId())) {
-            matchingResults.add(response.result());
-          }
-        }, 1);
+        checkInterrupted(failureContext);
+        int fragments;
+        try {
+          fragments = pollResponses(response -> {
+            if (request.requestId().equals(response.requestId())) {
+              matchingResults.add(response.result());
+            }
+          }, 1);
+        } catch (ReplySubscriptionClosedException failure) {
+          throw new IllegalStateException(failure.getMessage() + failureContext, failure);
+        }
 
-        if (matchingResults.isEmpty() && System.nanoTime() - deadline >= 0) {
-          break;
+        if (matchingResults.isEmpty()) {
+          checkInterrupted(failureContext);
+          if (System.nanoTime() - deadline >= 0) {
+            break;
+          }
         }
 
         idle.idle(fragments);
@@ -107,15 +128,41 @@ public class AeronRequestClient {
     return matchingResults.getFirst();
   }
 
+  private static void checkInterrupted(String failureContext) {
+    if (Thread.currentThread().isInterrupted()) {
+      throw new IllegalStateException("Interrupted while waiting for request completion" + failureContext);
+    }
+  }
+
   public long trySend(DirectBuffer encodedRequest, int offset, int length) {
+    checkRepliesOpen();
     return publication.offer(encodedRequest, offset, length);
   }
 
   public int pollResponses(Consumer<CommandResponse> onResponse, int fragmentLimit) {
+    Objects.requireNonNull(onResponse, "onResponse must not be null");
+    if (fragmentLimit < 0) {
+      throw new IllegalArgumentException("fragmentLimit must not be negative");
+    }
+    checkRepliesOpen();
     int fragments = replies.poll(replyAssembler, fragmentLimit);
     while (!receivedResponses.isEmpty()) {
       onResponse.accept(receivedResponses.removeFirst());
     }
     return fragments;
+  }
+
+  private void checkRepliesOpen() {
+    if (replies.isClosed()) {
+      throw new ReplySubscriptionClosedException();
+    }
+  }
+
+  private static final class ReplySubscriptionClosedException extends IllegalStateException {
+    private static final long serialVersionUID = 1L;
+
+    private ReplySubscriptionClosedException() {
+      super("Reply subscription is closed");
+    }
   }
 }

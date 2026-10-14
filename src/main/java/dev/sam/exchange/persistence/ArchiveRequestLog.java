@@ -2,6 +2,7 @@ package dev.sam.exchange.persistence;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -57,6 +58,7 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
 
   /** Replay before opening the writer, so no new request can overtake recovery. */
   public static ArchiveRequestLog open(AeronArchive archive, Consumer<CommandRequest> recovery) {
+    Objects.requireNonNull(recovery, "recovery");
     Recording recording = findRecording(archive);
     if (recording != null)
       replay(archive, recording, recovery);
@@ -115,6 +117,9 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
 
   @Override
   public boolean isRecorded(long position) {
+    if (position < 0) {
+      throw new IllegalArgumentException("Recording position must not be negative");
+    }
     ensureActive();
     return counters.getCounterValue(counterId) >= position;
   }
@@ -130,6 +135,7 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
 
   /** Stream recovery without materializing the recording as a list. */
   public static void replay(AeronArchive archive, Consumer<CommandRequest> recovery) {
+    Objects.requireNonNull(recovery, "recovery");
     Recording recording = findRecording(archive);
     if (recording != null)
       replay(archive, recording, recovery);

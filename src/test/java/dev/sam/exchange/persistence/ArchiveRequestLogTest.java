@@ -29,6 +29,45 @@ import io.aeron.driver.MediaDriver;
 @Timeout(25)
 class ArchiveRequestLogTest {
   @Test
+  void rejectsMissingRecoveryBeforeCreatingARecording(@TempDir Path directory) {
+    try (Fixture f = new Fixture(directory)) {
+      assertThrows(NullPointerException.class, () -> {
+        try (ArchiveRequestLog unexpected = ArchiveRequestLog.open(f.archive, null)) {
+          // Close a mistakenly opened writer so a failed regression test cannot leak it.
+          fail("Missing recovery callback opened recording " + unexpected.recordingId());
+        }
+      });
+      assertEquals(0, f.archive.listRecordings(0, 10, (a, b, c, d, e, g, h, i, j, k, l, m, n, o, p, q) -> {
+      }));
+      try (ArchiveRequestLog log = ArchiveRequestLog.open(f.archive, r -> fail("New log must be empty"))) {
+        assertTrue(append(log, request(1, new CancelOrder(1))) > 0);
+      }
+    }
+  }
+
+  @Test
+  void rejectsMissingRecoveryEvenWhenThereIsNothingToReplay(@TempDir Path directory) {
+    try (Fixture f = new Fixture(directory)) {
+      assertThrows(NullPointerException.class, () -> ArchiveRequestLog.replay(f.archive, null));
+      ArchiveRequestLog.replay(f.archive, r -> fail("New archive must be empty"));
+    }
+  }
+
+  @Test
+  void rejectsFailedOffersAsRecordingPositions(@TempDir Path directory) {
+    try (Fixture f = new Fixture(directory); ArchiveRequestLog log = ArchiveRequestLog.open(f.archive, r -> fail())) {
+      for (long position : new long[]{-1L, -2L, Long.MIN_VALUE}) {
+        assertThrows(IllegalArgumentException.class, () -> log.isRecorded(position));
+      }
+      assertTrue(log.isRecorded(0));
+      long position = append(log, request(1, new CancelOrder(1)));
+      assertTrue(log.isRecorded(position));
+      assertFalse(log.isRecorded(position + 32));
+      assertFalse(log.isRecorded(Long.MAX_VALUE));
+    }
+  }
+
+  @Test
   void recoversInOrderAndExtendsTheSameRecordingAcrossRestarts(@TempDir Path directory) {
     CommandRequest bid = request(1, new PlaceOrder(1, Side.BID, 100, 10));
     CommandRequest ask = request(2, new PlaceOrder(2, Side.ASK, 99, 4));

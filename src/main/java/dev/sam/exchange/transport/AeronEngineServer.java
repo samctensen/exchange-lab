@@ -37,7 +37,7 @@ public class AeronEngineServer {
       Thread.currentThread().interrupt();
     };
     Thread serverThread = Thread.currentThread();
-    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+    Thread shutdownHook = new Thread(() -> {
       // Ask the main thread to begin closing the server.
       shutdownRequested.set(true);
       try {
@@ -49,52 +49,61 @@ public class AeronEngineServer {
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
       }
-    }, "server-shutdown"));
+    }, "server-shutdown");
+    Runtime.getRuntime().addShutdownHook(shutdownHook);
 
-    Path archiveDirectory = config.archiveDirectory();
-    RequestStateMachine stateMachine = new RequestStateMachine(new MatchingEngine(new OrderBook()));
+    try {
+      Path archiveDirectory = config.archiveDirectory();
+      RequestStateMachine stateMachine = new RequestStateMachine(new MatchingEngine(new OrderBook()));
 
-    // Both processes use this directory to connect to the same media driver.
-    String aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
+      // Both processes use this directory to connect to the same media driver.
+      String aeronDirectory = config.aeronDirectory().toString();
 
-    // The server owns the driver; resources close in reverse order on exit.
-    try (ArchiveRuntime runtime = ArchiveRuntime.launch(archiveDirectory, aeronDirectory);
-        // Replay the saved log before creating the live request subscription, then extend that same recording.
-        ArchiveRequestLog requestLog = ArchiveRequestLog.open(runtime.archive(), stateMachine::process);
-        Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectory));
-        Subscription subscription = aeron.addSubscription("aeron:ipc", 1);
-        ResponsePublicationRegistry responsePublications = new ResponsePublicationRegistry(aeron);
-        // Busy spinning keeps polling for requests; budget a dedicated core for this runner.
-        AgentRunner runner = new AgentRunner(new BusySpinIdleStrategy(), errorHandler, null,
-            new AeronEngineAgent(subscription, responsePublications, stateMachine, requestLog, !config.quiet(),
-                SystemNanoClock.INSTANCE, stageTimings, config.logWindow(), config.replyDelivery(), replyStats))) {
+      // The server owns the driver; resources close in reverse order on exit.
+      try (ArchiveRuntime runtime = ArchiveRuntime.launch(archiveDirectory, aeronDirectory);
+          // Replay the saved log before creating the live request subscription, then extend that same recording.
+          ArchiveRequestLog requestLog = ArchiveRequestLog.open(runtime.archive(), stateMachine::process);
+          Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectory));
+          Subscription subscription = aeron.addSubscription("aeron:ipc", 1);
+          ResponsePublicationRegistry responsePublications = new ResponsePublicationRegistry(aeron);
+          // Busy spinning keeps polling for requests; budget a dedicated core for this runner.
+          AgentRunner runner = new AgentRunner(new BusySpinIdleStrategy(), errorHandler, null,
+              new AeronEngineAgent(subscription, responsePublications, stateMachine, requestLog, !config.quiet(),
+                  SystemNanoClock.INSTANCE, stageTimings, config.logWindow(), config.replyDelivery(), replyStats))) {
 
-      AgentRunner.startOnThread(runner);
+        AgentRunner.startOnThread(runner);
 
-      System.out.println("Server ready: " + aeronDirectory);
-      System.out.println("Archive: " + archiveDirectory);
-      System.out.println("Request recording: " + requestLog.recordingId());
-      System.out.println("Engine log window: " + config.logWindow());
-      System.out.println("Reply policy: capacity=" + config.replyDelivery().maxReplies() + ", bytes="
-          + config.replyDelivery().maxBytes() + ", timeout-ms=" + config.replyDelivery().timeout().toMillis());
-      System.out.println("Waiting for requests.");
+        System.out.println("Server ready: " + aeronDirectory);
+        System.out.println("Archive: " + archiveDirectory);
+        System.out.println("Request recording: " + requestLog.recordingId());
+        System.out.println("Engine log window: " + config.logWindow());
+        System.out.println("Reply policy: capacity=" + config.replyDelivery().maxReplies() + ", bytes="
+            + config.replyDelivery().maxBytes() + ", timeout-ms=" + config.replyDelivery().timeout().toMillis());
+        System.out.println("Waiting for requests.");
 
-      // The runner processes requests. Main waits here to keep resources open.
-      while (!shutdownRequested.get() && !runner.isClosed()) {
-        Thread.sleep(10);
+        // The runner processes requests. Main waits here to keep resources open.
+        while (!shutdownRequested.get() && !runner.isClosed()) {
+          Thread.sleep(10);
+        }
+      } finally {
+        // Resource closure has stopped the writer before main reads its samples.
+        if (stageTimings != null) {
+          System.out.print(stageTimings.summarize());
+        }
+        if (replyStats != null) {
+          System.out.print(replyStats.summarize());
+        }
+      }
+      Throwable failure = agentFailure.get();
+      if (failure != null) {
+        throw new IllegalStateException("Engine agent failed", failure);
       }
     } finally {
-      // Resource closure has stopped the writer before main reads its samples.
-      if (stageTimings != null) {
-        System.out.print(stageTimings.summarize());
+      try {
+        Runtime.getRuntime().removeShutdownHook(shutdownHook);
+      } catch (IllegalStateException shutdownInProgress) {
+        // The JVM is already running its hooks; this hook will finish after the server thread exits.
       }
-      if (replyStats != null) {
-        System.out.print(replyStats.summarize());
-      }
-    }
-    Throwable failure = agentFailure.get();
-    if (failure != null) {
-      throw new IllegalStateException("Engine agent failed", failure);
     }
   }
 }

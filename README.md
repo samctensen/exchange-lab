@@ -65,6 +65,11 @@ keeps earlier replies in flight.
 
 A successful `offer()` returns an end position in Aeron's publication buffer. It does **not** confirm persistence. `AeronEngineAgent` retains the request and that position until the corresponding `RecordingPos` counter catches up. Offer back pressure and recording catch-up each have their own fixed five-second deadline; the agent never offers an accepted request again while waiting. Only then does it call `RequestStateMachine.process()` and prepare a reply.
 
+`isRecorded(position)` accepts only nonnegative positions; a negative offer
+status is never a recording acknowledgement. Both `ArchiveRequestLog.open` and
+`replay` require a recovery callback, even for empty history, and reject a missing
+callback before creating a recording.
+
 The live `ArchiveRuntime` sets both file and catalog sync levels to **2**. Archive forces data and metadata before advancing the recording counter. This adds disk latency to the request path. Storage still depends on the OS/filesystem/device honoring those operations; there is no replica or disk-failure protection. The standalone Archive demo retains sync level zero for its introductory normal-restart lesson.
 
 Startup finds the single recording tagged `exchange-request-log` on stream **2001**, streams its SBE requests over replay stream **2002** into a fresh `RequestStateMachine`, then extends that same recording from its saved stop position. It restores the book, cached successful replies, and cached business rejections before opening the live request subscription. Recovery tolerates retries through the same deduplication logic; live retries and UUID conflicts do not append. An active, ambiguous, or truncated-prefix recording fails startup rather than guessing which history to apply.
@@ -87,6 +92,21 @@ mvn test             # Run the tests
 mvn verify           # Build, test, and check formatting
 mvn spotless:apply   # Format Java sources
 ```
+
+The [Java verification workflow](.github/workflows/verify.yml) runs on pull
+requests and pushes to `main`, and can also be started manually. It uses Java 25,
+checks tests and formatting, packages the application, and builds the separate
+JMH benchmark module. Reproduce both builds locally with:
+
+```sh
+mvn clean install
+mvn -f benchmarks/pom.xml clean verify
+```
+
+The first command installs the application artifact used by the benchmark module.
+On failure, CI retains Surefire reports from both modules for seven days as a
+workflow artifact. CI checks benchmark compilation and tests; it does not run
+performance measurements on the shared runner.
 
 ### Run the WebSocket gateway in Zed
 
@@ -120,6 +140,12 @@ execution pins its own schema argument so those launch arguments do not replace 
 3. Stop the server with **⌃C** in its terminal when finished. Its shutdown hook requests that the processing loop stop and waits for resource cleanup.
 
 The server defaults to the persistent directory `data/archive`, which is ignored by Git. Its first program argument selects another Archive directory, for example `data/demo-archive --quiet`. Missing directories are created. Reuse the same directory to recover the same exchange; use a new directory for a fresh book. The directory contains Archive's catalog and recording segments, and must have one server owner.
+
+Use `--aeron-directory=path` to choose the server's disposable Media Driver
+directory. It defaults to `java.io.tmpdir/exchange-lab-aeron`; the Archive must
+remain outside it. Blank paths and repeated driver options fail before startup.
+Pass the same driver path to the WebSocket gateway. The IPC demo client still
+uses the default path derived from its own `java.io.tmpdir`.
 
 The text journal implementation and its old CLI have been removed. Old `.journal` files are left untouched and are **not imported automatically**; passing a journal file where a directory is expected fails startup. Old journal data remains accessible through Git's previous implementation if a migration is needed.
 

@@ -247,9 +247,10 @@ class AeronRequestClientTest {
     }
   }
 
-  @Test
+  @ParameterizedTest(name = "null callback: {0}")
+  @ValueSource(booleans = {true, false})
   @Timeout(10)
-  void resumesWithRemainingBufferedResponsesAfterCallbackFailure(@TempDir Path tempDir) {
+  void resumesWithRemainingBufferedResponsesAfterCallbackFailure(boolean nullCallback, @TempDir Path tempDir) {
     ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
     try (
         MediaDriver driver = MediaDriver
@@ -288,11 +289,156 @@ class AeronRequestClientTest {
       assertSame(callbackFailure, failure);
       assertEquals(List.of(first, second), dispatched);
       List<CommandResponse> remaining = new ArrayList<>();
+      if (nullCallback) {
+        assertThrows(NullPointerException.class, () -> client.pollResponses(null, 0));
+      } else {
+        assertThrows(IllegalArgumentException.class, () -> client.pollResponses(remaining::add, -1));
+      }
+      CommandResponse fifth = new CommandResponse(new UUID(0L, 5L), new CancelResult(5L, true));
+      sendResponse(responses, fifth);
       // A zero fragment limit drains only responses already buffered before the callback threw.
       assertEquals(0, client.pollResponses(remaining::add, 0));
       assertEquals(List.of(third, fourth), remaining);
+      assertEquals(1, client.pollResponses(remaining::add, 10));
+      assertEquals(List.of(third, fourth, fifth), remaining);
       assertEquals(0, client.pollResponses(remaining::add, 10));
-      assertEquals(List.of(third, fourth), remaining, "Successfully dispatched responses must not replay either");
+      assertEquals(List.of(third, fourth, fifth), remaining,
+          "Successfully dispatched responses must not replay either");
+      assertTrue(errors.isEmpty(), errors::toString);
+    }
+  }
+
+  @Test
+  @Timeout(10)
+  void rejectsNullCallbackBeforeConsumingAnAvailableReply(@TempDir Path tempDir) {
+    ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
+    try (
+        MediaDriver driver = MediaDriver
+            .launchEmbedded(new MediaDriver.Context().aeronDirectoryName(tempDir.resolve("aeron").toString())
+                .dirDeleteOnShutdown(true).errorHandler(errors::add));
+        Aeron aeron = Aeron
+            .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
+        Subscription replies = aeron.addSubscription("aeron:ipc", 2);
+        Publication responses = aeron.addPublication("aeron:ipc", 2)) {
+      awaitConnected(responses);
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+      SleepingIdleStrategy idle = new SleepingIdleStrategy();
+      while (!replies.isConnected()) {
+        assertTrue(System.nanoTime() - deadline < 0, "Reply subscription did not connect");
+        idle.idle();
+      }
+      AeronRequestClient client = new AeronRequestClient(null, replies);
+      CommandResponse response = new CommandResponse(new UUID(0L, 1L), new CancelResult(7L, true));
+      sendResponse(responses, response);
+
+      assertThrows(NullPointerException.class, () -> client.pollResponses(null, 1));
+
+      List<CommandResponse> received = new ArrayList<>();
+      assertEquals(1, client.pollResponses(received::add, 1));
+      assertEquals(List.of(response), received);
+      assertTrue(errors.isEmpty(), errors::toString);
+    }
+  }
+
+  @Test
+  @Timeout(10)
+  void rejectsPollingAClosedReplySubscription(@TempDir Path tempDir) {
+    ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
+    try (
+        MediaDriver driver = MediaDriver
+            .launchEmbedded(new MediaDriver.Context().aeronDirectoryName(tempDir.resolve("aeron").toString())
+                .dirDeleteOnShutdown(true).errorHandler(errors::add));
+        Aeron aeron = Aeron
+            .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add))) {
+      Subscription replies = aeron.addSubscription("aeron:ipc", 2);
+      AeronRequestClient client = new AeronRequestClient(null, replies);
+      replies.close();
+
+      IllegalStateException failure = assertThrows(IllegalStateException.class, () -> client.pollResponses(response -> {
+        throw new AssertionError("Closed subscription delivered a reply");
+      }, 1));
+
+      assertTrue(failure.getMessage().contains("Reply subscription is closed"), failure.getMessage());
+      assertTrue(errors.isEmpty(), errors::toString);
+    }
+  }
+
+  @ParameterizedTest(name = "blocking send: {0}")
+  @ValueSource(booleans = {true, false})
+  @Timeout(10)
+  void closedRepliesPreventOfferingARequest(boolean blocking, @TempDir Path tempDir) {
+    ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
+    try (
+        MediaDriver driver = MediaDriver
+            .launchEmbedded(new MediaDriver.Context().aeronDirectoryName(tempDir.resolve("aeron").toString())
+                .dirDeleteOnShutdown(true).errorHandler(errors::add));
+        Aeron aeron = Aeron
+            .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
+        Publication publication = aeron.addPublication("aeron:ipc", 1);
+        Subscription commands = aeron.addSubscription("aeron:ipc", 1)) {
+      Subscription replies = aeron.addSubscription("aeron:ipc", 2);
+      awaitConnected(publication);
+      AeronRequestClient client = new AeronRequestClient(publication, replies,
+          new ClientConfig(Duration.ofMillis(30), 3));
+      CommandRequest request = new CommandRequest(new UUID(0L, 1L), new CancelOrder(7L));
+      replies.close();
+      long positionBeforeSend = publication.position();
+
+      IllegalStateException failure = assertThrows(IllegalStateException.class, () -> {
+        if (blocking) {
+          client.send(request);
+        } else {
+          ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(256);
+          int length = new SbeRequestCodec().encode(request, buffer, 0);
+          client.trySend(buffer, 0, length);
+        }
+      });
+
+      assertEquals(positionBeforeSend, publication.position(), "Closed replies must prevent offering any bytes");
+      List<CommandRequest> received = new ArrayList<>();
+      SbeRequestCodec codec = new SbeRequestCodec();
+      commands.poll((buffer, offset, length, header) -> received.add(codec.decode(buffer, offset, length)), 10);
+      assertEquals(List.of(), received, "No request may be offered when the return path is already closed");
+      assertTrue(failure.getMessage().contains("Reply subscription is closed"), failure.getMessage());
+      assertFalse(failure.getMessage().contains("outcome unknown"), failure.getMessage());
+      assertFalse(publication.isClosed(), "The caller still owns the publication");
+      assertTrue(errors.isEmpty(), errors::toString);
+    }
+  }
+
+  @Test
+  @Timeout(10)
+  void closedRepliesAbortAnAcceptedRequestWithoutRetrying(@TempDir Path tempDir) throws Exception {
+    ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
+    try (ExecutorService executor = Executors.newSingleThreadExecutor();
+        MediaDriver driver = MediaDriver
+            .launchEmbedded(new MediaDriver.Context().aeronDirectoryName(tempDir.resolve("aeron").toString())
+                .dirDeleteOnShutdown(true).errorHandler(errors::add));
+        Aeron aeron = Aeron
+            .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
+        Publication publication = aeron.addPublication("aeron:ipc", 1);
+        Subscription commands = aeron.addSubscription("aeron:ipc", 1)) {
+      Subscription replies = aeron.addSubscription("aeron:ipc", 2);
+      awaitConnected(publication);
+      AeronRequestClient client = new AeronRequestClient(publication, replies,
+          new ClientConfig(Duration.ofSeconds(3), 3));
+      CommandRequest request = new CommandRequest(new UUID(0L, 1L), new CancelOrder(7L));
+      List<CommandRequest> received = new ArrayList<>();
+      SbeRequestCodec codec = new SbeRequestCodec();
+      FragmentHandler handler = (buffer, offset, length, header) -> received.add(codec.decode(buffer, offset, length));
+      Future<CommandResult> result = executor.submit(() -> client.send(request));
+      awaitRequests(commands, handler, received, 1, result);
+
+      replies.close();
+
+      ExecutionException failure = assertThrows(ExecutionException.class, () -> result.get(1, TimeUnit.SECONDS));
+      IllegalStateException cause = assertInstanceOf(IllegalStateException.class, failure.getCause());
+      assertTrue(cause.getMessage().contains("Reply subscription is closed"), cause.getMessage());
+      assertTrue(cause.getMessage().contains(request.requestId().toString()), cause.getMessage());
+      assertTrue(cause.getMessage().contains("outcome unknown"), cause.getMessage());
+      commands.poll(handler, 10);
+      assertEquals(List.of(request), received, "Closing replies must stop all retries after the accepted request");
+      assertFalse(publication.isClosed(), "The caller still owns the publication");
       assertTrue(errors.isEmpty(), errors::toString);
     }
   }

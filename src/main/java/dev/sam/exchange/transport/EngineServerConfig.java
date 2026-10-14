@@ -1,11 +1,12 @@
 package dev.sam.exchange.transport;
 
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.time.Duration;
 
-record EngineServerConfig(Path archiveDirectory, boolean quiet, int logWindow, int stageWarmup, int stageSamples,
-    ReplyDeliveryConfig replyDelivery, boolean replyStats) {
-  private static final String USAGE = "Usage: AeronEngineServer [archiveDirectory] [--quiet] "
+record EngineServerConfig(Path archiveDirectory, Path aeronDirectory, boolean quiet, int logWindow, int stageWarmup,
+    int stageSamples, ReplyDeliveryConfig replyDelivery, boolean replyStats) {
+  private static final String USAGE = "Usage: AeronEngineServer [archiveDirectory] [--aeron-directory=path] [--quiet] "
       + "[--stage-timing=warmupCount,sampleCount] [--log-window=count]\n"
       + "       [--reply-capacity=count] [--reply-bytes=count] [--reply-timeout-ms=milliseconds] [--reply-stats]\n"
       + "       AeronEngineServer --help";
@@ -15,6 +16,8 @@ record EngineServerConfig(Path archiveDirectory, boolean quiet, int logWindow, i
     return USAGE + "\n\n" + """
         Options:
           archiveDirectory                      Persistent archive location (default: data/archive).
+          --aeron-directory=path                Disposable Media Driver location.
+                                                (default: java.io.tmpdir/exchange-lab-aeron).
           --quiet                               Suppress per-result logging (default: result logging enabled).
           --log-window=count                    Request log window (default: %d; count >= 1).
           --stage-timing=warmupCount,sampleCount Collect stage timing (default: disabled).
@@ -31,6 +34,7 @@ record EngineServerConfig(Path archiveDirectory, boolean quiet, int logWindow, i
 
   static EngineServerConfig parse(String[] args) {
     Path archiveDirectory = null;
+    Path aeronDirectory = null;
     boolean quiet = false;
     Integer logWindow = null;
     int stageWarmup = 0;
@@ -45,6 +49,19 @@ record EngineServerConfig(Path archiveDirectory, boolean quiet, int logWindow, i
           throw new IllegalArgumentException("Duplicate option: --quiet");
         }
         quiet = true;
+      } else if (arg.startsWith("--aeron-directory=")) {
+        if (aeronDirectory != null) {
+          throw new IllegalArgumentException("Duplicate option: --aeron-directory");
+        }
+        String value = arg.substring("--aeron-directory=".length());
+        if (value.isBlank()) {
+          throw new IllegalArgumentException("--aeron-directory must not be blank");
+        }
+        try {
+          aeronDirectory = Path.of(value);
+        } catch (InvalidPathException e) {
+          throw new IllegalArgumentException("--aeron-directory requires a valid path: '" + value + "'", e);
+        }
       } else if (arg.startsWith("--log-window=")) {
         if (logWindow != null) {
           throw new IllegalArgumentException("Duplicate option: --log-window");
@@ -97,6 +114,9 @@ record EngineServerConfig(Path archiveDirectory, boolean quiet, int logWindow, i
       } else if (archiveDirectory != null) {
         throw new IllegalArgumentException("Only one archive directory is allowed; unexpected argument: " + arg);
       } else {
+        if (arg.isBlank()) {
+          throw new IllegalArgumentException("archive directory must not be blank");
+        }
         archiveDirectory = Path.of(arg);
       }
     }
@@ -105,9 +125,10 @@ record EngineServerConfig(Path archiveDirectory, boolean quiet, int logWindow, i
         replyCapacity == null ? defaults.maxReplies() : replyCapacity,
         replyBytes == null ? defaults.maxBytes() : replyBytes,
         replyTimeoutMillis == null ? defaults.timeout() : Duration.ofMillis(replyTimeoutMillis));
-    return new EngineServerConfig(archiveDirectory == null ? Path.of("data", "archive") : archiveDirectory, quiet,
-        logWindow == null ? AeronEngineAgent.DEFAULT_LOG_WINDOW : logWindow, stageWarmup, stageSamples, replyDelivery,
-        replyStats);
+    return new EngineServerConfig(archiveDirectory == null ? Path.of("data", "archive") : archiveDirectory,
+        aeronDirectory == null ? Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron") : aeronDirectory,
+        quiet, logWindow == null ? AeronEngineAgent.DEFAULT_LOG_WINDOW : logWindow, stageWarmup, stageSamples,
+        replyDelivery, replyStats);
   }
 
   private static int parseInteger(String option, String value) {
