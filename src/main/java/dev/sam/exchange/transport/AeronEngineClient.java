@@ -39,7 +39,7 @@ public class AeronEngineClient {
         Publication publication = aeron.addPublication("aeron:ipc?response-correlation-id=" + replies.registrationId(),
             1)) {
 
-      AeronRequestClient client = new AeronRequestClient(publication, replies);
+      AeronRequestClient client = new AeronRequestClient(publication, replies, config.clientConfig());
 
       try (EngineGateway gateway = new EngineGateway(client, 128)) {
         gateway.start();

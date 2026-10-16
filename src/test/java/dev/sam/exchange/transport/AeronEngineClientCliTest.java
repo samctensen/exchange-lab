@@ -30,11 +30,20 @@ class AeronEngineClientCliTest {
       assertTrue(help.contains("AeronEngineServer"), help);
       assertTrue(help.contains("--aeron-directory=path"), help);
       assertTrue(help.contains("java.io.tmpdir/exchange-lab-aeron"), help);
+      assertTrue(help.contains("--timeout-ms="), help);
+      assertTrue(help.contains("--max-attempts="), help);
       assertFalse(Files.exists(tempDir.resolve("exchange-lab-aeron")), "Help must not create driver resources");
     } finally {
       System.setOut(originalOut);
       System.setProperty("java.io.tmpdir", originalTempDir);
     }
+  }
+
+  @Test
+  void acceptsRetryOptionBoundaries() {
+    assertDoesNotThrow(() -> EngineClientConfig.parse(new String[]{"--timeout-ms=1", "--max-attempts=1"}));
+    assertDoesNotThrow(
+        () -> EngineClientConfig.parse(new String[]{"--timeout-ms=9223372036854", "--max-attempts=2147483647"}));
   }
 
   @Test
@@ -53,9 +62,15 @@ class AeronEngineClientCliTest {
     String originalTempDir = System.getProperty("java.io.tmpdir");
     System.setProperty("java.io.tmpdir", tempDir.toString());
     try {
-      for (String[] args : List.of(new String[]{"--unknown=value"}, new String[]{"unexpected"},
-          new String[]{"--aeron-directory"}, new String[]{"--aeron-directory="}, new String[]{"--aeron-directory=   "},
-          new String[]{"--aeron-directory=invalid\0path"},
+      for (String[] args : List.of(new String[]{"--timeout-ms=0"}, new String[]{"--timeout-ms=-1"},
+          new String[]{"--timeout-ms=9223372036855"}, new String[]{"--timeout-ms=9223372036854775808"},
+          new String[]{"--timeout-ms=abc"}, new String[]{"--timeout-ms="}, new String[]{"--timeout-ms"},
+          new String[]{"--timeout-ms=1", "--timeout-ms=2"}, new String[]{"--max-attempts=0"},
+          new String[]{"--max-attempts=-1"}, new String[]{"--max-attempts=2147483648"},
+          new String[]{"--max-attempts=abc"}, new String[]{"--max-attempts="}, new String[]{"--max-attempts"},
+          new String[]{"--max-attempts=1", "--max-attempts=2"}, new String[]{"--unknown=value"},
+          new String[]{"unexpected"}, new String[]{"--aeron-directory"}, new String[]{"--aeron-directory="},
+          new String[]{"--aeron-directory=   "}, new String[]{"--aeron-directory=invalid\0path"},
           new String[]{"--aeron-directory=" + tempDir, "--aeron-directory=" + tempDir})) {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
             () -> AeronEngineClient.main(args), String.join(" ", args));

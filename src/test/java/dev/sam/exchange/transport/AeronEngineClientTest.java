@@ -18,7 +18,6 @@ import java.util.concurrent.TimeUnit;
 import org.agrona.ExpandableArrayBuffer;
 import org.agrona.concurrent.SleepingIdleStrategy;
 import org.agrona.concurrent.UnsafeBuffer;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -180,9 +179,11 @@ class AeronEngineClientTest {
     }
   }
 
-  @Test
+  @ParameterizedTest(name = "custom retry options: {0}")
+  @ValueSource(booleans = {false, true})
   @Timeout(30)
-  void retriesTheSameRequestAndAcceptsADelayedReplyOnce(@TempDir Path tempDir) throws Exception {
+  void retriesTheSameRequestAndAcceptsADelayedReplyOnce(boolean customRetryOptions, @TempDir Path tempDir)
+      throws Exception {
     Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
     Path clientLog = tempDir.resolve("client.log");
     ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
@@ -194,7 +195,9 @@ class AeronEngineClientTest {
             .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
         Subscription commands = aeron.addSubscription("aeron:ipc", 1);
         ResponsePublicationRegistry registry = new ResponsePublicationRegistry(aeron)) {
-      Process client = startClient(tempDir, clientLog);
+      Process client = customRetryOptions
+          ? startClient(tempDir, clientLog, "--timeout-ms=1000", "--max-attempts=2")
+          : startClient(tempDir, clientLog);
       try {
         Publication replies = awaitReplyPublication(commands, registry, client, clientLog);
         List<byte[]> messages = new ArrayList<>();
@@ -205,7 +208,7 @@ class AeronEngineClientTest {
 
         // Wait briefly to catch immediate resends, then withhold the reply until the timeout.
         assertStillWaiting(commands, handler, messages, 1, client, clientLog);
-        awaitCommandCount(commands, handler, messages, 2, client, clientLog, 8);
+        awaitCommandCount(commands, handler, messages, 2, client, clientLog, customRetryOptions ? 3 : 8);
         assertArrayEquals(messages.getFirst(), messages.get(1), "A retry must preserve the UUID and command bytes");
         CommandResponse delayed = new CommandResponse(first.requestId(), new PlaceResult(1L, List.of(), 10L));
         sendResponse(replies, delayed);
@@ -236,9 +239,11 @@ class AeronEngineClientTest {
     }
   }
 
-  @Test
+  @ParameterizedTest(name = "total attempts: {0}")
+  @ValueSource(ints = {1, 3})
   @Timeout(30)
-  void drainsAcceptedBatchAfterRequestTimeoutAndReportsUnknownOutcome(@TempDir Path tempDir) throws Exception {
+  void drainsAcceptedBatchAfterRequestTimeoutAndReportsUnknownOutcome(int maxAttempts, @TempDir Path tempDir)
+      throws Exception {
     Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
     Path clientLog = tempDir.resolve("client.log");
     ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
@@ -250,7 +255,9 @@ class AeronEngineClientTest {
             .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
         Subscription commands = aeron.addSubscription("aeron:ipc", 1);
         ResponsePublicationRegistry registry = new ResponsePublicationRegistry(aeron)) {
-      Process client = startClient(tempDir, clientLog);
+      Process client = maxAttempts == 3
+          ? startClient(tempDir, clientLog, "--timeout-ms=1000")
+          : startClient(tempDir, clientLog, "--timeout-ms=1000", "--max-attempts=" + maxAttempts);
       try {
         Publication replies = awaitReplyPublication(commands, registry, client, clientLog);
         List<byte[]> messages = new ArrayList<>();
@@ -259,24 +266,24 @@ class AeronEngineClientTest {
         CommandRequest first = decodeRequest(messages.getFirst());
         assertEquals(new PlaceOrder(1L, Side.BID, 100L, 10L), first.command());
 
-        // Withhold all replies to the first request. After its three attempts, graceful close must
+        // Withhold all replies to the first request. After its allowed attempts, graceful close must
         // drain the second request, which the demo already accepted into the gateway's queue.
-        awaitCommandCount(commands, handler, messages, 4, client, clientLog, 18);
-        for (int attempt = 1; attempt < 3; attempt++) {
+        awaitCommandCount(commands, handler, messages, maxAttempts + 1, client, clientLog, 6);
+        for (int attempt = 1; attempt < maxAttempts; attempt++) {
           assertArrayEquals(messages.getFirst(), messages.get(attempt), "Retries must preserve the original bytes");
         }
-        CommandRequest second = decodeRequest(messages.get(3));
+        CommandRequest second = decodeRequest(messages.get(maxAttempts));
         assertEquals(new PlaceOrder(2L, Side.ASK, 99L, 4L), second.command());
         assertNotEquals(first.requestId(), second.requestId());
 
         // Main has observed the first failure, but must keep Aeron open until this accepted work finishes.
-        assertStillWaiting(commands, handler, messages, 4, client, clientLog);
+        assertStillWaiting(commands, handler, messages, maxAttempts + 1, client, clientLog);
         sendResponse(replies,
             new CommandResponse(second.requestId(), new PlaceResult(2L, List.of(new Trade(2L, 1L, 100L, 4L)), 0L)));
         assertTrue(client.waitFor(5, TimeUnit.SECONDS), "Client did not finish draining the accepted batch");
         String output = Files.readString(clientLog);
         assertNotEquals(0, client.exitValue(), "An unanswered request must not look successful");
-        assertTrue(output.contains("No reply after 3 attempts"), output);
+        assertTrue(output.contains("No reply after " + maxAttempts + " attempts"), output);
         assertTrue(output.contains(first.requestId().toString()), output);
         assertTrue(output.contains("outcome unknown"), output);
         assertFalse(output.contains("PlaceResult["),
