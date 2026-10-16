@@ -49,6 +49,17 @@ class AeronBenchmarkPipelineTest {
   }
 
   @Test
+  void permitsTheMaximumMeasurementCount() {
+    ScriptedClient client = new ScriptedClient(100);
+    client.offerResults.add(Publication.CLOSED);
+    IllegalStateException failure = assertThrows(IllegalStateException.class,
+        () -> AeronLatencyBenchmark.measure(client, 1_000_000, 1, new TestClock(), new BusySpinIdleStrategy()));
+    assertTrue(failure.getMessage().contains("Request publication failed"), failure.getMessage());
+    assertEquals(1, client.offers.size());
+    assertEquals(0, client.polls);
+  }
+
+  @Test
   void refillsOneFreedSlotAndTimesOutOfOrderRepliesByUuid() {
     TestClock clock = new TestClock();
     ScriptedClient client = new ScriptedClient(100);

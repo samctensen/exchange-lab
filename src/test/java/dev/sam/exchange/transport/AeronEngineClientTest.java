@@ -18,7 +18,6 @@ import java.util.concurrent.TimeUnit;
 import org.agrona.ExpandableArrayBuffer;
 import org.agrona.concurrent.SleepingIdleStrategy;
 import org.agrona.concurrent.UnsafeBuffer;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -38,21 +37,34 @@ import io.aeron.driver.MediaDriver;
 import io.aeron.logbuffer.FragmentHandler;
 
 class AeronEngineClientTest {
-  @Test
+  @ParameterizedTest(name = "custom driver directory: {0}")
+  @ValueSource(booleans = {false, true})
   @Timeout(30)
-  void gatewayBatchMatchesAndIsRecordedByTheRealServer(@TempDir Path tempDir) throws Exception {
+  void gatewayBatchMatchesAndIsRecordedByTheRealServer(boolean customDirectory, @TempDir Path tempDir)
+      throws Exception {
     Path archiveDirectory = tempDir.resolve("archive");
     Path serverLog = tempDir.resolve("server.log");
     Path clientLog = tempDir.resolve("client.log");
+    Path driverDirectory = customDirectory
+        ? tempDir.resolve("shared driver with spaces")
+        : tempDir.resolve("exchange-lab-aeron");
+    Path clientTempDir = customDirectory ? Files.createDirectory(tempDir.resolve("client tmp")) : tempDir;
     String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
-    Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-        "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Djava.io.tmpdir=" + tempDir, "-cp", classpath,
-        AeronEngineServer.class.getName(), archiveDirectory.toString()).redirectErrorStream(true)
-        .redirectOutput(serverLog.toFile()).start();
+    List<String> serverCommand = new ArrayList<>(
+        List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+            "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Djava.io.tmpdir=" + tempDir, "-cp", classpath,
+            AeronEngineServer.class.getName(), archiveDirectory.toString()));
+    if (customDirectory) {
+      serverCommand.add("--aeron-directory=" + driverDirectory);
+    }
+    Process server = new ProcessBuilder(serverCommand).redirectErrorStream(true).redirectOutput(serverLog.toFile())
+        .start();
     Process client = null;
     try {
       awaitServerReady(server, serverLog);
-      client = startClient(tempDir, clientLog);
+      client = customDirectory
+          ? startClient(clientTempDir, clientLog, "--aeron-directory=" + driverDirectory)
+          : startClient(clientTempDir, clientLog);
       assertTrue(client.waitFor(10, TimeUnit.SECONDS), "Gateway client did not finish\n" + Files.readString(clientLog));
       String output = Files.readString(clientLog);
       assertEquals(0, client.exitValue(), output);
@@ -61,6 +73,11 @@ class AeronEngineClientTest {
           output.lines().filter(line -> line.startsWith("PlaceResult[")).toList());
       assertFalse(output.contains("Exception"), output);
       assertTrue(server.isAlive(), "Client shutdown must leave the exchange running");
+      assertTrue(Files.exists(driverDirectory.resolve("cnc.dat")), "The client must not remove the server driver");
+      if (customDirectory) {
+        assertFalse(Files.exists(clientTempDir.resolve("exchange-lab-aeron")),
+            "The client must use the selected driver");
+      }
 
       // Stop the real server cleanly before reopening its Archive to verify the recorded batch.
       server.destroy();
@@ -68,11 +85,12 @@ class AeronEngineClientTest {
       String serverOutput = Files.readString(serverLog);
       assertFalse(serverOutput.contains("Exception"), serverOutput);
       assertFalse(serverOutput.contains("Server shutdown exceeded"), serverOutput);
-      assertFalse(Files.exists(tempDir.resolve("exchange-lab-aeron")), serverOutput);
+      assertFalse(Files.exists(driverDirectory), serverOutput);
       List<CommandRequest> recorded = ArchiveTestSupport.readAll(archiveDirectory);
       assertEquals(List.of(new PlaceOrder(1L, Side.BID, 100L, 10L), new PlaceOrder(2L, Side.ASK, 99L, 4L)),
           recorded.stream().map(CommandRequest::command).toList());
       assertNotEquals(recorded.get(0).requestId(), recorded.get(1).requestId());
+      assertLoggedRequests(output, recorded);
     } finally {
       if (client != null && client.isAlive()) {
         client.destroyForcibly();
@@ -113,6 +131,9 @@ class AeronEngineClientTest {
         awaitCommandCount(commands, handler, messages, 1, client, clientLog);
         CommandRequest first = decodeRequest(messages.getFirst());
         assertEquals(new PlaceOrder(1L, Side.BID, 100L, 10L), first.command());
+        String pendingOutput = Files.readString(clientLog);
+        assertTrue(pendingOutput.contains("Submitting request " + first.requestId() + ": " + first.command()),
+            "Request identity must be available before its result\n" + pendingOutput);
 
         // Ten 32-byte trade entries plus the 44-byte prefix exceed this publication's single-fragment payload.
         List<Trade> firstTrades = new ArrayList<>();
@@ -148,6 +169,7 @@ class AeronEngineClientTest {
         assertTrue(client.waitFor(5, TimeUnit.SECONDS), "Client did not finish after its matching replies");
         String output = Files.readString(clientLog);
         assertEquals(0, client.exitValue(), output);
+        assertLoggedRequests(output, List.of(first, second));
         assertEquals(List.of(firstResult.toString(),
             "PlaceResult[orderId=2, trades=[Trade[incomingOrderId=2, restingOrderId=1, priceTicks=100, quantityLots=4]], remainingLots=0]"),
             output.lines().filter(line -> line.startsWith("PlaceResult[")).toList());
@@ -162,9 +184,11 @@ class AeronEngineClientTest {
     }
   }
 
-  @Test
+  @ParameterizedTest(name = "custom retry options: {0}")
+  @ValueSource(booleans = {false, true})
   @Timeout(30)
-  void retriesTheSameRequestAndAcceptsADelayedReplyOnce(@TempDir Path tempDir) throws Exception {
+  void retriesTheSameRequestAndAcceptsADelayedReplyOnce(boolean customRetryOptions, @TempDir Path tempDir)
+      throws Exception {
     Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
     Path clientLog = tempDir.resolve("client.log");
     ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
@@ -176,7 +200,9 @@ class AeronEngineClientTest {
             .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
         Subscription commands = aeron.addSubscription("aeron:ipc", 1);
         ResponsePublicationRegistry registry = new ResponsePublicationRegistry(aeron)) {
-      Process client = startClient(tempDir, clientLog);
+      Process client = customRetryOptions
+          ? startClient(tempDir, clientLog, "--timeout-ms=1000", "--max-attempts=2")
+          : startClient(tempDir, clientLog);
       try {
         Publication replies = awaitReplyPublication(commands, registry, client, clientLog);
         List<byte[]> messages = new ArrayList<>();
@@ -184,10 +210,13 @@ class AeronEngineClientTest {
         awaitCommandCount(commands, handler, messages, 1, client, clientLog);
         CommandRequest first = decodeRequest(messages.getFirst());
         assertEquals(new PlaceOrder(1L, Side.BID, 100L, 10L), first.command());
+        String pendingOutput = Files.readString(clientLog);
+        assertTrue(pendingOutput.contains("Submitting request " + first.requestId() + ": " + first.command()),
+            "Request identity must be available before its result\n" + pendingOutput);
 
         // Wait briefly to catch immediate resends, then withhold the reply until the timeout.
         assertStillWaiting(commands, handler, messages, 1, client, clientLog);
-        awaitCommandCount(commands, handler, messages, 2, client, clientLog, 8);
+        awaitCommandCount(commands, handler, messages, 2, client, clientLog, customRetryOptions ? 3 : 8);
         assertArrayEquals(messages.getFirst(), messages.get(1), "A retry must preserve the UUID and command bytes");
         CommandResponse delayed = new CommandResponse(first.requestId(), new PlaceResult(1L, List.of(), 10L));
         sendResponse(replies, delayed);
@@ -205,6 +234,7 @@ class AeronEngineClientTest {
         assertTrue(client.waitFor(5, TimeUnit.SECONDS), "Client did not finish after the matching reply");
         String output = Files.readString(clientLog);
         assertEquals(0, client.exitValue(), output);
+        assertLoggedRequests(output, List.of(first, next));
         assertEquals(List.of("PlaceResult[orderId=1, trades=[], remainingLots=10]",
             "PlaceResult[orderId=2, trades=[Trade[incomingOrderId=2, restingOrderId=1, priceTicks=100, quantityLots=4]], remainingLots=0]"),
             output.lines().filter(line -> line.startsWith("PlaceResult[")).toList());
@@ -218,9 +248,11 @@ class AeronEngineClientTest {
     }
   }
 
-  @Test
+  @ParameterizedTest(name = "total attempts: {0}")
+  @ValueSource(ints = {1, 3})
   @Timeout(30)
-  void drainsAcceptedBatchAfterRequestTimeoutAndReportsUnknownOutcome(@TempDir Path tempDir) throws Exception {
+  void drainsAcceptedBatchAfterRequestTimeoutAndReportsUnknownOutcome(int maxAttempts, @TempDir Path tempDir)
+      throws Exception {
     Path driverDirectory = tempDir.resolve("exchange-lab-aeron");
     Path clientLog = tempDir.resolve("client.log");
     ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
@@ -232,7 +264,9 @@ class AeronEngineClientTest {
             .connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()).errorHandler(errors::add));
         Subscription commands = aeron.addSubscription("aeron:ipc", 1);
         ResponsePublicationRegistry registry = new ResponsePublicationRegistry(aeron)) {
-      Process client = startClient(tempDir, clientLog);
+      Process client = maxAttempts == 3
+          ? startClient(tempDir, clientLog, "--timeout-ms=1000")
+          : startClient(tempDir, clientLog, "--timeout-ms=1000", "--max-attempts=" + maxAttempts);
       try {
         Publication replies = awaitReplyPublication(commands, registry, client, clientLog);
         List<byte[]> messages = new ArrayList<>();
@@ -240,25 +274,29 @@ class AeronEngineClientTest {
         awaitCommandCount(commands, handler, messages, 1, client, clientLog);
         CommandRequest first = decodeRequest(messages.getFirst());
         assertEquals(new PlaceOrder(1L, Side.BID, 100L, 10L), first.command());
+        String pendingOutput = Files.readString(clientLog);
+        assertTrue(pendingOutput.contains("Submitting request " + first.requestId() + ": " + first.command()),
+            "Request identity must be available before its result\n" + pendingOutput);
 
-        // Withhold all replies to the first request. After its three attempts, graceful close must
+        // Withhold all replies to the first request. After its allowed attempts, graceful close must
         // drain the second request, which the demo already accepted into the gateway's queue.
-        awaitCommandCount(commands, handler, messages, 4, client, clientLog, 18);
-        for (int attempt = 1; attempt < 3; attempt++) {
+        awaitCommandCount(commands, handler, messages, maxAttempts + 1, client, clientLog, 6);
+        for (int attempt = 1; attempt < maxAttempts; attempt++) {
           assertArrayEquals(messages.getFirst(), messages.get(attempt), "Retries must preserve the original bytes");
         }
-        CommandRequest second = decodeRequest(messages.get(3));
+        CommandRequest second = decodeRequest(messages.get(maxAttempts));
         assertEquals(new PlaceOrder(2L, Side.ASK, 99L, 4L), second.command());
         assertNotEquals(first.requestId(), second.requestId());
 
         // Main has observed the first failure, but must keep Aeron open until this accepted work finishes.
-        assertStillWaiting(commands, handler, messages, 4, client, clientLog);
+        assertStillWaiting(commands, handler, messages, maxAttempts + 1, client, clientLog);
         sendResponse(replies,
             new CommandResponse(second.requestId(), new PlaceResult(2L, List.of(new Trade(2L, 1L, 100L, 4L)), 0L)));
         assertTrue(client.waitFor(5, TimeUnit.SECONDS), "Client did not finish draining the accepted batch");
         String output = Files.readString(clientLog);
         assertNotEquals(0, client.exitValue(), "An unanswered request must not look successful");
-        assertTrue(output.contains("No reply after 3 attempts"), output);
+        assertLoggedRequests(output, List.of(first, second));
+        assertTrue(output.contains("No reply after " + maxAttempts + " attempts"), output);
         assertTrue(output.contains(first.requestId().toString()), output);
         assertTrue(output.contains("outcome unknown"), output);
         assertFalse(output.contains("PlaceResult["),
@@ -270,6 +308,17 @@ class AeronEngineClientTest {
           client.waitFor(3, TimeUnit.SECONDS);
         }
       }
+    }
+  }
+
+  private static void assertLoggedRequests(String output, List<CommandRequest> requests) {
+    List<String> expected = requests.stream()
+        .map(request -> "Submitting request " + request.requestId() + ": " + request.command()).toList();
+    assertEquals(expected, output.lines().filter(line -> line.startsWith("Submitting request ")).toList(),
+        "Logged identities must match the commands sent to the engine, once per logical request");
+    int firstResult = output.indexOf("PlaceResult[");
+    if (firstResult >= 0) {
+      assertTrue(output.indexOf(expected.getLast()) < firstResult, "Log the accepted batch before printing results");
     }
   }
 
@@ -300,11 +349,13 @@ class AeronEngineClientTest {
     }
   }
 
-  private static Process startClient(Path tempDir, Path clientLog) throws IOException {
+  private static Process startClient(Path tempDir, Path clientLog, String... args) throws IOException {
     String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
-    return new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+    List<String> command = new ArrayList<>(List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
         "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Djava.io.tmpdir=" + tempDir, "-cp", classpath,
-        AeronEngineClient.class.getName()).redirectErrorStream(true).redirectOutput(clientLog.toFile()).start();
+        AeronEngineClient.class.getName()));
+    command.addAll(List.of(args));
+    return new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(clientLog.toFile()).start();
   }
 
   private static FragmentHandler captureRequests(List<byte[]> messages) {

@@ -129,8 +129,15 @@ WebSocket error contract or make an uncertain order safe to submit under a new U
 
 ### Direct Aeron clients
 
-`AeronRequestClient.send` is the blocking helper used by Java demos. Interrupting
-its thread stops waiting and preserves the interrupt flag. Closing its reply
+The standalone `AeronEngineClient` demo and `AeronLatencyBenchmark` accept the same
+`--aeron-directory=path` selection as the gateway. This lets each process use its
+own temporary directory while connecting to one driver. Both provide `--help`
+without requiring a running engine; see the [demo client options](../README.md#run-the-ipc-demo-in-zed)
+and [benchmark instructions](../README.md#measure-ipc-latency-and-throughput).
+
+`AeronRequestClient.send` is the blocking helper for direct Java integrations;
+the demo uses `EngineGateway` to submit its batch. Interrupting the blocking
+call's thread stops waiting and preserves the interrupt flag. Closing its reply
 subscription also ends the wait promptly. Once any attempt has been accepted by
 the publication, either failure reports the request UUID and an unknown outcome.
 Keep that UUID and command for reconciliation; stopping a wait does not cancel

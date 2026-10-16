@@ -2,7 +2,6 @@ package dev.sam.exchange.transport;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -28,8 +27,6 @@ import io.aeron.logbuffer.FrameDescriptor;
 import io.aeron.protocol.DataHeaderFlyweight;
 
 public class AeronLatencyBenchmark {
-  private static final int DEFAULT_WARMUP_COUNT = 500;
-  private static final int DEFAULT_SAMPLE_COUNT = 2_000;
   private static final CancelResult EXPECTED_RESULT = new CancelResult(1L, false);
 
   record Measurement(long[] latencies, long elapsedNanos, long threadCpuNanos, long processCpuNanos) {
@@ -39,32 +36,48 @@ public class AeronLatencyBenchmark {
   }
 
   public static void main(String[] args) {
-    if (args.length > 5 || (args.length == 5 && !"--archive-counters".equals(args[4]))) {
-      throw new IllegalArgumentException(
-          "Usage: AeronLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight] [sleep|spin] [--archive-counters]");
+    if (Arrays.asList(args).contains("--help")) {
+      if (args.length != 1)
+        throw new IllegalArgumentException("--help must be used alone");
+      System.out.println("""
+          Usage: AeronLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight] [sleep|spin] [options]
+          Start a separate AeronEngineServer with a fresh, empty archive and --quiet before benchmarking.
+
+            warmupCount          Completed requests before measurement, 0..1000000 (default: 500)
+            sampleCount          Measured requests, 1..1000000 (default: 2000)
+            maxInFlight          Maximum outstanding requests, positive integer (default: 1)
+            sleep|spin           Client polling idle strategy (default: sleep)
+            --archive-counters   Report Archive write counters (default: disabled)
+            --aeron-directory=p  Existing engine Media Driver directory
+                                  (default: java.io.tmpdir/exchange-lab-aeron)
+            --help               Print this help and exit; use by itself
+
+          Named options may appear before, between, or after positional arguments.
+          Each send and reply wait has a 5-second timeout, with one attempt per request.
+          Failed runs do not print performance statistics.
+          """);
+      return;
     }
-    int warmupCount = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_WARMUP_COUNT;
-    int sampleCount = args.length > 1 ? Integer.parseInt(args[1]) : DEFAULT_SAMPLE_COUNT;
-    int maxInFlight = args.length > 2 ? Integer.parseInt(args[2]) : 1;
-    if (warmupCount < 0 || sampleCount < 1 || maxInFlight < 1) {
-      throw new IllegalArgumentException(
-          "Warmup count must be non-negative; sample count and max in flight must be positive");
-    }
-    String idleMode = args.length > 3 ? args[3] : "sleep";
+    BenchmarkConfig config = BenchmarkConfig.parse(args);
+    int warmupCount = config.warmupCount();
+    int sampleCount = config.sampleCount();
+    int maxInFlight = config.maxInFlight();
+    String idleMode = config.idleMode();
     IdleStrategy idle = idleStrategy(idleMode);
 
     // Use a separate server with a fresh archive directory and --quiet for a comparable baseline.
-    String aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
     Measurement measured;
     String archiveReport = "";
-    try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectory));
+    try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(config.aeronDirectory().toString()));
         Subscription replies = aeron.addSubscription("aeron:ipc?control-mode=response", 2);
         Publication publication = aeron.addPublication("aeron:ipc?response-correlation-id=" + replies.registrationId(),
             1)) {
       // A timeout fails this run; automatic resends would change the workload being measured.
       AeronRequestClient client = new AeronRequestClient(publication, replies,
           new ClientConfig(Duration.ofSeconds(5), 1));
-      ArchiveWriteCounters counters = args.length == 5 ? ArchiveWriteCounters.find(aeron.countersReader()) : null;
+      ArchiveWriteCounters counters = config.archiveCounters()
+          ? ArchiveWriteCounters.find(aeron.countersReader())
+          : null;
       // This workload uses one fixed-size, unfragmented cancel frame per fresh request.
       int encodedLength = new SbeRequestCodec().encode(new CommandRequest(new UUID(0, 0), new CancelOrder(1)),
           new ExpandableArrayBuffer(64), 0);
@@ -107,9 +120,11 @@ public class AeronLatencyBenchmark {
 
   static Measurement measure(AeronRequestClient client, int count, int maxInFlight, NanoClock clock,
       IdleStrategy idle) {
-    if (count < 0 || maxInFlight < 1) {
-      throw new IllegalArgumentException("Sample count must be non-negative and max in flight must be positive");
+    if (count < 0 || count > BenchmarkConfig.MAX_COUNT || maxInFlight < 1) {
+      throw new IllegalArgumentException(
+          "Sample count must be between 0 and " + BenchmarkConfig.MAX_COUNT + "; max in flight must be positive");
     }
+    checkInterrupted(Map.of());
     long[] latencies = new long[count];
     Map<UUID, PendingSample> inFlight = new LinkedHashMap<>();
     SbeRequestCodec codec = new SbeRequestCodec();
@@ -132,6 +147,7 @@ public class AeronLatencyBenchmark {
     while (sent < count || !inFlight.isEmpty()) {
       int work = 0;
       while (sent < count && inFlight.size() < maxInFlight) {
+        checkInterrupted(inFlight);
         if (pendingOffer == null) {
           // Fresh UUIDs exercise recording rather than the response cache. Construction is outside the latency timer.
           CommandRequest request = new CommandRequest(UUID.randomUUID(), new CancelOrder(1L));
@@ -140,8 +156,10 @@ public class AeronLatencyBenchmark {
           encodedLength = codec.encode(request, buffer, 0);
         }
 
+        checkInterrupted(inFlight);
         long result = client.trySend(buffer, 0, encodedLength);
         if (result < 0) {
+          checkInterrupted(inFlight);
           if (result == Publication.CLOSED || result == Publication.MAX_POSITION_EXCEEDED) {
             throw new IllegalStateException(
                 "Request publication failed for " + pendingOffer.requestId() + "; offer result: " + result);
@@ -161,6 +179,7 @@ public class AeronLatencyBenchmark {
         work++;
       }
 
+      checkInterrupted(inFlight);
       work += client.pollResponses(response -> {
         PendingSample sample = inFlight.remove(response.requestId());
         // Streams can carry unrelated or duplicate replies; only an active UUID can complete a sample.
@@ -173,6 +192,7 @@ public class AeronLatencyBenchmark {
         }
         latencies[sample.index()] = elapsed;
       }, Math.min(maxInFlight, 10));
+      checkInterrupted(inFlight);
 
       long now = clock.nanoTime();
       for (PendingSample sample : inFlight.values()) {
@@ -183,6 +203,7 @@ public class AeronLatencyBenchmark {
       }
       idle.idle(work);
     }
+    checkInterrupted(inFlight);
     long elapsed = clock.nanoTime() - runStarted;
     long threadCpuEnded = threadCpuStarted >= 0 ? threads.getCurrentThreadCpuTime() : -1;
     long processCpuEnded = os instanceof com.sun.management.OperatingSystemMXBean extended
@@ -190,6 +211,16 @@ public class AeronLatencyBenchmark {
         : -1;
     return new Measurement(latencies, elapsed, cpuDelta(threadCpuStarted, threadCpuEnded),
         cpuDelta(processCpuStarted, processCpuEnded));
+  }
+
+  private static void checkInterrupted(Map<UUID, PendingSample> inFlight) {
+    if (Thread.currentThread().isInterrupted()) {
+      String outstanding = inFlight.isEmpty()
+          ? ""
+          : "; outstanding requests: " + inFlight.size() + "; representative request "
+              + inFlight.keySet().iterator().next() + "; outcome unknown";
+      throw new IllegalStateException("Interrupted while measuring benchmark requests" + outstanding);
+    }
   }
 
   private static long cpuDelta(long started, long ended) {

@@ -94,9 +94,9 @@ mvn spotless:apply   # Format Java sources
 ```
 
 The [Java verification workflow](.github/workflows/verify.yml) runs on pull
-requests and pushes to `main`, and can also be started manually. It uses Java 25,
-checks tests and formatting, packages the application, and builds the separate
-JMH benchmark module. Reproduce both builds locally with:
+requests and pushes to `main`, and can also be started manually. It uses Java 25
+on Ubuntu 24.04 and macOS 15, checks tests and formatting, packages the application,
+and builds the separate JMH benchmark module. Reproduce both builds locally with:
 
 ```sh
 mvn clean install
@@ -104,9 +104,11 @@ mvn -f benchmarks/pom.xml clean verify
 ```
 
 The first command installs the application artifact used by the benchmark module.
-On failure, CI retains Surefire reports from both modules for seven days as a
-workflow artifact. CI checks benchmark compilation and tests; it does not run
-performance measurements on the shared runner.
+On failure, CI retains Surefire reports from both modules for seven days in a
+separate artifact for each operating system. Both jobs finish independently, so
+a failure on one platform does not hide the other platform's result. CI checks
+benchmark compilation and tests; it does not run performance measurements on the
+shared runners.
 
 ### Run the WebSocket gateway in Zed
 
@@ -144,8 +146,25 @@ The server defaults to the persistent directory `data/archive`, which is ignored
 Use `--aeron-directory=path` to choose the server's disposable Media Driver
 directory. It defaults to `java.io.tmpdir/exchange-lab-aeron`; the Archive must
 remain outside it. Blank paths and repeated driver options fail before startup.
-Pass the same driver path to the WebSocket gateway. The IPC demo client still
-uses the default path derived from its own `java.io.tmpdir`.
+Pass the same driver path to the WebSocket gateway, IPC demo client, or latency
+benchmark. Each supports `--aeron-directory=path` and uses the default path derived
+from its own `java.io.tmpdir` when the flag is omitted.
+
+The demo client accepts these program arguments, validating them before opening
+Aeron connections or submitting orders:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--aeron-directory=path` | `java.io.tmpdir/exchange-lab-aeron` | Existing engine driver directory; use a nonblank, valid path. |
+| `--timeout-ms=n` | `5000` | Timeout for each send phase and each reply wait; positive milliseconds that fit in signed 64-bit nanoseconds. |
+| `--max-attempts=n` | `3` | Total attempts including the first; `1` disables automatic resends. |
+| `--help` | — | Print usage and exit without connecting; use by itself. |
+
+For example: `--aeron-directory=/tmp/exchange-demo-driver --timeout-ms=2000 --max-attempts=1`.
+The client prints each request UUID and command before submission, followed by
+the existing result lines. Retain these identities if a reply is lost. Running
+the demo again creates new UUIDs; it does not reconcile a previous uncertain
+request or reset the book.
 
 The text journal implementation and its old CLI have been removed. Old `.journal` files are left untouched and are **not imported automatically**; passing a journal file where a directory is expected fails startup. Old journal data remains accessible through Git's previous implementation if a migration is needed.
 
@@ -153,7 +172,8 @@ After an abrupt kill, Archive's mark-file heartbeat may prevent an immediate res
 
 The sample client uses fixed order IDs. Running it again against the same book can therefore produce a duplicate-ID rejection. A clean demo run can use a new Archive directory.
 
-Both processes must use the same `java.io.tmpdir`, where the server creates `exchange-lab-aeron`. Aeron requires this JVM option:
+The client and server must select the same driver directory. With no explicit
+directory flags, both must use the same `java.io.tmpdir`. Aeron requires this JVM option:
 
 ```text
 --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED
@@ -247,11 +267,27 @@ Use a dedicated server with a **new, empty Archive directory for each benchmark 
 3. Run `AeronLatencyBenchmark.main`. Defaults are **500 warmup requests**, **2,000 measured requests**, **one request in flight**, and **sleeping client polling**. Optional program arguments are `warmupCount sampleCount maxInFlight idleMode`, for example `500 2000 8 spin`; warmup may be zero, samples and window size must be positive, and idle mode is `sleep` or `spin`. The window limits outstanding client requests; the engine's log window defaults to eight entries. `sleep` uses `SleepingIdleStrategy`, while `spin` uses `BusySpinIdleStrategy` on the benchmark's polling thread.
 4. Stop the benchmark server with **⌃C** when finished. The benchmark closes its client connections and leaves the server running.
 
+Use `--help` by itself to print benchmark usage without connecting to Aeron.
+Warmup and measured counts are each capped at **1,000,000** to bound the latency
+sample arrays; warmup may be zero, while measured samples must be positive.
+Oversized counts fail before allocation or driver connection.
+
+Append `--aeron-directory=path` to select the same driver as the server. For example,
+server arguments `data/latency-run-custom --quiet --aeron-directory=/tmp/exchange-bench-driver`
+pair with benchmark arguments `500 2000 8 spin --aeron-directory=/tmp/exchange-bench-driver`.
+The `--archive-counters` diagnostic flag can be combined with that directory flag.
+
 The server accepts `--log-window=<positive integer>` to configure how many offered requests can await recording/execution. For example, server arguments `data/latency-run-16 --quiet --log-window=16` pair with benchmark arguments `500 2000 16 sleep`. Startup prints the selected engine window. This bound is independent of the client's outstanding-request limit and the WebSocket gateway's eight active requests. The default remains eight; increasing it permits more queued work but does not add engine threads or change Archive's file/catalog sync levels (both remain 2). The engine executes recorded requests in FIFO order while unsent replies wait in separate bounded queues per client connection.
 
 For an engine-only comparison, hold the client at `32` and test engine windows `8`, `16`, and `32`. Matching both windows at each value instead measures three different concurrency levels. Requests waiting in inbound IPC before engine admission contribute to client latency but are outside server stage timing.
 
 The benchmark fills the selected window using `trySend()`, polls with `pollResponses()`, and refills available slots as replies arrive. It tracks each request by UUID, so replies can arrive out of order. Warmup uses the same window and drains completely before measurement starts. Temporary offer back pressure retains the same encoded request and timer while the loop continues polling replies. Each accepted request gets its own reply deadline and is never resent. Any send failure, reply timeout, or unexpected result aborts the run without printing partial statistics.
+
+When embedding the benchmark, interrupting its thread stops further offers and
+polls and preserves the interrupt flag. Accepted requests may still execute;
+the failure reports outstanding requests as having unknown outcomes. Interrupted
+runs do not produce a partial performance summary and must not be compared with
+completed runs.
 
 The report gives p50, p99, and maximum latency in microseconds (`us`), plus completed requests per second. Percentiles use the nearest-rank convention: p99 is the smallest observed value covering at least 99% of the samples. Each latency timer starts after request construction, before encoding, and ends when its matching reply is handled. It includes time spent retrying unsuccessful offers. Throughput divides measured completions by elapsed time for the entire measured phase, including request construction and UUID generation; it does not divide by the sum of overlapping latencies. Client/stream creation, warmup, sorting, and report printing are excluded from throughput. With zero warmup, waiting for the publication to connect can still affect the first measured requests.
 
