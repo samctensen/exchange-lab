@@ -5,6 +5,18 @@ import java.nio.file.Path;
 import java.util.HashSet;
 
 record EngineClientConfig(Path aeronDirectory) {
+  static String help() {
+    return """
+        Usage: AeronEngineClient [options]
+        Submit two demo orders and print their results.
+        Start AeronEngineServer before this client.
+
+          --aeron-directory=path  Existing engine Media Driver directory
+                                  (default: java.io.tmpdir/exchange-lab-aeron)
+          --help                  Print this help and exit; use by itself
+        """;
+  }
+
   static EngineClientConfig parse(String[] args) {
     Path aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron");
     var seen = new HashSet<String>();

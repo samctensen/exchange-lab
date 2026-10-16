@@ -1,6 +1,7 @@
 package dev.sam.exchange.transport;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -17,6 +18,14 @@ import io.aeron.Subscription;
 public class AeronEngineClient {
 
   public static void main(String[] args) {
+    if (Arrays.asList(args).contains("--help")) {
+      if (args.length != 1) {
+        throw new IllegalArgumentException("--help must be used alone");
+      }
+      System.out.println(EngineClientConfig.help());
+      return;
+    }
+
     // Connect to the media driver owned by the server.
     EngineClientConfig config = EngineClientConfig.parse(args);
 
