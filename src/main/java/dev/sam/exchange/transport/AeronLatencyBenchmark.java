@@ -124,6 +124,7 @@ public class AeronLatencyBenchmark {
       throw new IllegalArgumentException(
           "Sample count must be between 0 and " + BenchmarkConfig.MAX_COUNT + "; max in flight must be positive");
     }
+    checkInterrupted(Map.of());
     long[] latencies = new long[count];
     Map<UUID, PendingSample> inFlight = new LinkedHashMap<>();
     SbeRequestCodec codec = new SbeRequestCodec();
@@ -146,6 +147,7 @@ public class AeronLatencyBenchmark {
     while (sent < count || !inFlight.isEmpty()) {
       int work = 0;
       while (sent < count && inFlight.size() < maxInFlight) {
+        checkInterrupted(inFlight);
         if (pendingOffer == null) {
           // Fresh UUIDs exercise recording rather than the response cache. Construction is outside the latency timer.
           CommandRequest request = new CommandRequest(UUID.randomUUID(), new CancelOrder(1L));
@@ -154,8 +156,10 @@ public class AeronLatencyBenchmark {
           encodedLength = codec.encode(request, buffer, 0);
         }
 
+        checkInterrupted(inFlight);
         long result = client.trySend(buffer, 0, encodedLength);
         if (result < 0) {
+          checkInterrupted(inFlight);
           if (result == Publication.CLOSED || result == Publication.MAX_POSITION_EXCEEDED) {
             throw new IllegalStateException(
                 "Request publication failed for " + pendingOffer.requestId() + "; offer result: " + result);
@@ -175,6 +179,7 @@ public class AeronLatencyBenchmark {
         work++;
       }
 
+      checkInterrupted(inFlight);
       work += client.pollResponses(response -> {
         PendingSample sample = inFlight.remove(response.requestId());
         // Streams can carry unrelated or duplicate replies; only an active UUID can complete a sample.
@@ -187,6 +192,7 @@ public class AeronLatencyBenchmark {
         }
         latencies[sample.index()] = elapsed;
       }, Math.min(maxInFlight, 10));
+      checkInterrupted(inFlight);
 
       long now = clock.nanoTime();
       for (PendingSample sample : inFlight.values()) {
@@ -197,6 +203,7 @@ public class AeronLatencyBenchmark {
       }
       idle.idle(work);
     }
+    checkInterrupted(inFlight);
     long elapsed = clock.nanoTime() - runStarted;
     long threadCpuEnded = threadCpuStarted >= 0 ? threads.getCurrentThreadCpuTime() : -1;
     long processCpuEnded = os instanceof com.sun.management.OperatingSystemMXBean extended
@@ -204,6 +211,16 @@ public class AeronLatencyBenchmark {
         : -1;
     return new Measurement(latencies, elapsed, cpuDelta(threadCpuStarted, threadCpuEnded),
         cpuDelta(processCpuStarted, processCpuEnded));
+  }
+
+  private static void checkInterrupted(Map<UUID, PendingSample> inFlight) {
+    if (Thread.currentThread().isInterrupted()) {
+      String outstanding = inFlight.isEmpty()
+          ? ""
+          : "; outstanding requests: " + inFlight.size() + "; representative request "
+              + inFlight.keySet().iterator().next() + "; outcome unknown";
+      throw new IllegalStateException("Interrupted while measuring benchmark requests" + outstanding);
+    }
   }
 
   private static long cpuDelta(long started, long ended) {
