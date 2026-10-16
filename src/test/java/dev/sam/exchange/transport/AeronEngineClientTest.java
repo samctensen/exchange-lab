@@ -90,6 +90,7 @@ class AeronEngineClientTest {
       assertEquals(List.of(new PlaceOrder(1L, Side.BID, 100L, 10L), new PlaceOrder(2L, Side.ASK, 99L, 4L)),
           recorded.stream().map(CommandRequest::command).toList());
       assertNotEquals(recorded.get(0).requestId(), recorded.get(1).requestId());
+      assertLoggedRequests(output, recorded);
     } finally {
       if (client != null && client.isAlive()) {
         client.destroyForcibly();
@@ -130,6 +131,9 @@ class AeronEngineClientTest {
         awaitCommandCount(commands, handler, messages, 1, client, clientLog);
         CommandRequest first = decodeRequest(messages.getFirst());
         assertEquals(new PlaceOrder(1L, Side.BID, 100L, 10L), first.command());
+        String pendingOutput = Files.readString(clientLog);
+        assertTrue(pendingOutput.contains("Submitting request " + first.requestId() + ": " + first.command()),
+            "Request identity must be available before its result\n" + pendingOutput);
 
         // Ten 32-byte trade entries plus the 44-byte prefix exceed this publication's single-fragment payload.
         List<Trade> firstTrades = new ArrayList<>();
@@ -165,6 +169,7 @@ class AeronEngineClientTest {
         assertTrue(client.waitFor(5, TimeUnit.SECONDS), "Client did not finish after its matching replies");
         String output = Files.readString(clientLog);
         assertEquals(0, client.exitValue(), output);
+        assertLoggedRequests(output, List.of(first, second));
         assertEquals(List.of(firstResult.toString(),
             "PlaceResult[orderId=2, trades=[Trade[incomingOrderId=2, restingOrderId=1, priceTicks=100, quantityLots=4]], remainingLots=0]"),
             output.lines().filter(line -> line.startsWith("PlaceResult[")).toList());
@@ -205,6 +210,9 @@ class AeronEngineClientTest {
         awaitCommandCount(commands, handler, messages, 1, client, clientLog);
         CommandRequest first = decodeRequest(messages.getFirst());
         assertEquals(new PlaceOrder(1L, Side.BID, 100L, 10L), first.command());
+        String pendingOutput = Files.readString(clientLog);
+        assertTrue(pendingOutput.contains("Submitting request " + first.requestId() + ": " + first.command()),
+            "Request identity must be available before its result\n" + pendingOutput);
 
         // Wait briefly to catch immediate resends, then withhold the reply until the timeout.
         assertStillWaiting(commands, handler, messages, 1, client, clientLog);
@@ -226,6 +234,7 @@ class AeronEngineClientTest {
         assertTrue(client.waitFor(5, TimeUnit.SECONDS), "Client did not finish after the matching reply");
         String output = Files.readString(clientLog);
         assertEquals(0, client.exitValue(), output);
+        assertLoggedRequests(output, List.of(first, next));
         assertEquals(List.of("PlaceResult[orderId=1, trades=[], remainingLots=10]",
             "PlaceResult[orderId=2, trades=[Trade[incomingOrderId=2, restingOrderId=1, priceTicks=100, quantityLots=4]], remainingLots=0]"),
             output.lines().filter(line -> line.startsWith("PlaceResult[")).toList());
@@ -265,6 +274,9 @@ class AeronEngineClientTest {
         awaitCommandCount(commands, handler, messages, 1, client, clientLog);
         CommandRequest first = decodeRequest(messages.getFirst());
         assertEquals(new PlaceOrder(1L, Side.BID, 100L, 10L), first.command());
+        String pendingOutput = Files.readString(clientLog);
+        assertTrue(pendingOutput.contains("Submitting request " + first.requestId() + ": " + first.command()),
+            "Request identity must be available before its result\n" + pendingOutput);
 
         // Withhold all replies to the first request. After its allowed attempts, graceful close must
         // drain the second request, which the demo already accepted into the gateway's queue.
@@ -283,6 +295,7 @@ class AeronEngineClientTest {
         assertTrue(client.waitFor(5, TimeUnit.SECONDS), "Client did not finish draining the accepted batch");
         String output = Files.readString(clientLog);
         assertNotEquals(0, client.exitValue(), "An unanswered request must not look successful");
+        assertLoggedRequests(output, List.of(first, second));
         assertTrue(output.contains("No reply after " + maxAttempts + " attempts"), output);
         assertTrue(output.contains(first.requestId().toString()), output);
         assertTrue(output.contains("outcome unknown"), output);
@@ -295,6 +308,17 @@ class AeronEngineClientTest {
           client.waitFor(3, TimeUnit.SECONDS);
         }
       }
+    }
+  }
+
+  private static void assertLoggedRequests(String output, List<CommandRequest> requests) {
+    List<String> expected = requests.stream()
+        .map(request -> "Submitting request " + request.requestId() + ": " + request.command()).toList();
+    assertEquals(expected, output.lines().filter(line -> line.startsWith("Submitting request ")).toList(),
+        "Logged identities must match the commands sent to the engine, once per logical request");
+    int firstResult = output.indexOf("PlaceResult[");
+    if (firstResult >= 0) {
+      assertTrue(output.indexOf(expected.getLast()) < firstResult, "Log the accepted batch before printing results");
     }
   }
 

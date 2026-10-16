@@ -49,6 +49,7 @@ public class AeronEngineClient {
         // Submit every order and collect its future.
         for (EngineCommand order : orders) {
           CommandRequest request = new CommandRequest(UUID.randomUUID(), order);
+          System.out.println("Submitting request " + request.requestId() + ": " + order);
           results.add(gateway.submit(request));
         }
 
