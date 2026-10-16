@@ -2,7 +2,6 @@ package dev.sam.exchange.transport;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -28,9 +27,6 @@ import io.aeron.logbuffer.FrameDescriptor;
 import io.aeron.protocol.DataHeaderFlyweight;
 
 public class AeronLatencyBenchmark {
-  private static final int DEFAULT_WARMUP_COUNT = 500;
-  private static final int DEFAULT_SAMPLE_COUNT = 2_000;
-  private static final int MAX_COUNT = 1_000_000;
   private static final CancelResult EXPECTED_RESULT = new CancelResult(1L, false);
 
   record Measurement(long[] latencies, long elapsedNanos, long threadCpuNanos, long processCpuNanos) {
@@ -40,32 +36,26 @@ public class AeronLatencyBenchmark {
   }
 
   public static void main(String[] args) {
-    if (args.length > 5 || (args.length == 5 && !"--archive-counters".equals(args[4]))) {
-      throw new IllegalArgumentException(
-          "Usage: AeronLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight] [sleep|spin] [--archive-counters]");
-    }
-    int warmupCount = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_WARMUP_COUNT;
-    int sampleCount = args.length > 1 ? Integer.parseInt(args[1]) : DEFAULT_SAMPLE_COUNT;
-    int maxInFlight = args.length > 2 ? Integer.parseInt(args[2]) : 1;
-    if (warmupCount < 0 || warmupCount > MAX_COUNT || sampleCount < 1 || sampleCount > MAX_COUNT || maxInFlight < 1) {
-      throw new IllegalArgumentException("Warmup count must be between 0 and " + MAX_COUNT
-          + "; sample count must be between 1 and " + MAX_COUNT + "; max in flight must be positive");
-    }
-    String idleMode = args.length > 3 ? args[3] : "sleep";
+    BenchmarkConfig config = BenchmarkConfig.parse(args);
+    int warmupCount = config.warmupCount();
+    int sampleCount = config.sampleCount();
+    int maxInFlight = config.maxInFlight();
+    String idleMode = config.idleMode();
     IdleStrategy idle = idleStrategy(idleMode);
 
     // Use a separate server with a fresh archive directory and --quiet for a comparable baseline.
-    String aeronDirectory = Path.of(System.getProperty("java.io.tmpdir"), "exchange-lab-aeron").toString();
     Measurement measured;
     String archiveReport = "";
-    try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectory));
+    try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(config.aeronDirectory().toString()));
         Subscription replies = aeron.addSubscription("aeron:ipc?control-mode=response", 2);
         Publication publication = aeron.addPublication("aeron:ipc?response-correlation-id=" + replies.registrationId(),
             1)) {
       // A timeout fails this run; automatic resends would change the workload being measured.
       AeronRequestClient client = new AeronRequestClient(publication, replies,
           new ClientConfig(Duration.ofSeconds(5), 1));
-      ArchiveWriteCounters counters = args.length == 5 ? ArchiveWriteCounters.find(aeron.countersReader()) : null;
+      ArchiveWriteCounters counters = config.archiveCounters()
+          ? ArchiveWriteCounters.find(aeron.countersReader())
+          : null;
       // This workload uses one fixed-size, unfragmented cancel frame per fresh request.
       int encodedLength = new SbeRequestCodec().encode(new CommandRequest(new UUID(0, 0), new CancelOrder(1)),
           new ExpandableArrayBuffer(64), 0);
@@ -108,9 +98,9 @@ public class AeronLatencyBenchmark {
 
   static Measurement measure(AeronRequestClient client, int count, int maxInFlight, NanoClock clock,
       IdleStrategy idle) {
-    if (count < 0 || count > MAX_COUNT || maxInFlight < 1) {
+    if (count < 0 || count > BenchmarkConfig.MAX_COUNT || maxInFlight < 1) {
       throw new IllegalArgumentException(
-          "Sample count must be between 0 and " + MAX_COUNT + "; max in flight must be positive");
+          "Sample count must be between 0 and " + BenchmarkConfig.MAX_COUNT + "; max in flight must be positive");
     }
     long[] latencies = new long[count];
     Map<UUID, PendingSample> inFlight = new LinkedHashMap<>();

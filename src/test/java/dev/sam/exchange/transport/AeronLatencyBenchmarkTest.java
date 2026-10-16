@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.PlaceOrder;
@@ -35,6 +36,63 @@ import io.aeron.driver.MediaDriver;
 
 @Timeout(20)
 class AeronLatencyBenchmarkTest {
+  @ParameterizedTest
+  @ValueSource(ints = {0, 2, 4})
+  void connectsToTheConfiguredEngineDirectoryWithFlagsAmongPositionals(int flagPosition, @TempDir Path tempDir)
+      throws Exception {
+    Path serverTemp = Files.createDirectory(tempDir.resolve("server-temp"));
+    Path clientTemp = Files.createDirectory(tempDir.resolve("client-temp"));
+    Path driverDirectory = tempDir.resolve("custom driver");
+    Path archiveDirectory = tempDir.resolve("archive");
+    Path serverLog = tempDir.resolve("server.log");
+    Path benchmarkLog = tempDir.resolve("benchmark.log");
+    Process server = startMain(serverTemp, serverLog, AeronEngineServer.class, archiveDirectory.toString(), "--quiet",
+        "--aeron-directory=" + driverDirectory);
+    Process benchmark = null;
+    try {
+      awaitOutput(server, serverLog, "Server ready:");
+      List<String> arguments = new ArrayList<>(List.of("2", "4", "2", "spin"));
+      arguments.add(flagPosition, "--aeron-directory=" + driverDirectory);
+      arguments.add(flagPosition, "--archive-counters");
+      benchmark = startMain(clientTemp, benchmarkLog, AeronLatencyBenchmark.class, arguments.toArray(String[]::new));
+      assertTrue(benchmark.waitFor(5, TimeUnit.SECONDS), "Benchmark did not use the configured engine directory");
+      String output = Files.readString(benchmarkLog);
+      assertEquals(0, benchmark.exitValue(), output);
+      assertTrue(output.contains("Warmup: 2 requests"), output);
+      assertTrue(output.contains("Samples: 4 requests"), output);
+      assertTrue(output.contains("Max in flight: 2"), output);
+      assertTrue(output.contains("Client idle strategy: spin"), output);
+      assertTrue(output.contains("Archive write bytes (measured phase): 256"), output);
+      assertFalse(Files.exists(clientTemp.resolve("exchange-lab-aeron")));
+      assertTrue(server.isAlive());
+      server.destroy();
+      assertTrue(server.waitFor(3, TimeUnit.SECONDS));
+      assertEquals(6, ArchiveTestSupport.readAll(archiveDirectory).size());
+      assertFalse(Files.exists(driverDirectory));
+    } finally {
+      stopIfAlive(benchmark);
+      stopIfAlive(server);
+    }
+  }
+
+  @Test
+  void absentConfiguredDriverDirectoryIsNotCreated(@TempDir Path tempDir) throws Exception {
+    Path driverDirectory = tempDir.resolve("absent-driver");
+    Path log = tempDir.resolve("benchmark.log");
+    Process benchmark = startMain(tempDir, log, AeronLatencyBenchmark.class, "0", "1",
+        "--aeron-directory=" + driverDirectory);
+    try {
+      assertTrue(benchmark.waitFor(12, TimeUnit.SECONDS), "Missing driver did not time out");
+      String output = Files.readString(log);
+      assertTrue(benchmark.exitValue() != 0, output);
+      assertTrue(output.contains("DriverTimeoutException"), output);
+      assertFalse(output.contains("Samples:"), output);
+      assertFalse(Files.exists(driverDirectory));
+    } finally {
+      stopIfAlive(benchmark);
+    }
+  }
+
   @ParameterizedTest
   @CsvSource({"0, 1, 1, sleep, true, default", "5, 12, 2, sleep, false, default", "5, 13, 4, sleep, false, default",
       "5, 19, 8, sleep, true, default", "0, 3, 16, sleep, false, default", "0, 1, 1, spin, false, default",
