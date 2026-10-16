@@ -38,21 +38,34 @@ import io.aeron.driver.MediaDriver;
 import io.aeron.logbuffer.FragmentHandler;
 
 class AeronEngineClientTest {
-  @Test
+  @ParameterizedTest(name = "custom driver directory: {0}")
+  @ValueSource(booleans = {false, true})
   @Timeout(30)
-  void gatewayBatchMatchesAndIsRecordedByTheRealServer(@TempDir Path tempDir) throws Exception {
+  void gatewayBatchMatchesAndIsRecordedByTheRealServer(boolean customDirectory, @TempDir Path tempDir)
+      throws Exception {
     Path archiveDirectory = tempDir.resolve("archive");
     Path serverLog = tempDir.resolve("server.log");
     Path clientLog = tempDir.resolve("client.log");
+    Path driverDirectory = customDirectory
+        ? tempDir.resolve("shared driver with spaces")
+        : tempDir.resolve("exchange-lab-aeron");
+    Path clientTempDir = customDirectory ? Files.createDirectory(tempDir.resolve("client tmp")) : tempDir;
     String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
-    Process server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-        "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Djava.io.tmpdir=" + tempDir, "-cp", classpath,
-        AeronEngineServer.class.getName(), archiveDirectory.toString()).redirectErrorStream(true)
-        .redirectOutput(serverLog.toFile()).start();
+    List<String> serverCommand = new ArrayList<>(
+        List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+            "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Djava.io.tmpdir=" + tempDir, "-cp", classpath,
+            AeronEngineServer.class.getName(), archiveDirectory.toString()));
+    if (customDirectory) {
+      serverCommand.add("--aeron-directory=" + driverDirectory);
+    }
+    Process server = new ProcessBuilder(serverCommand).redirectErrorStream(true).redirectOutput(serverLog.toFile())
+        .start();
     Process client = null;
     try {
       awaitServerReady(server, serverLog);
-      client = startClient(tempDir, clientLog);
+      client = customDirectory
+          ? startClient(clientTempDir, clientLog, "--aeron-directory=" + driverDirectory)
+          : startClient(clientTempDir, clientLog);
       assertTrue(client.waitFor(10, TimeUnit.SECONDS), "Gateway client did not finish\n" + Files.readString(clientLog));
       String output = Files.readString(clientLog);
       assertEquals(0, client.exitValue(), output);
@@ -61,6 +74,11 @@ class AeronEngineClientTest {
           output.lines().filter(line -> line.startsWith("PlaceResult[")).toList());
       assertFalse(output.contains("Exception"), output);
       assertTrue(server.isAlive(), "Client shutdown must leave the exchange running");
+      assertTrue(Files.exists(driverDirectory.resolve("cnc.dat")), "The client must not remove the server driver");
+      if (customDirectory) {
+        assertFalse(Files.exists(clientTempDir.resolve("exchange-lab-aeron")),
+            "The client must use the selected driver");
+      }
 
       // Stop the real server cleanly before reopening its Archive to verify the recorded batch.
       server.destroy();
@@ -68,7 +86,7 @@ class AeronEngineClientTest {
       String serverOutput = Files.readString(serverLog);
       assertFalse(serverOutput.contains("Exception"), serverOutput);
       assertFalse(serverOutput.contains("Server shutdown exceeded"), serverOutput);
-      assertFalse(Files.exists(tempDir.resolve("exchange-lab-aeron")), serverOutput);
+      assertFalse(Files.exists(driverDirectory), serverOutput);
       List<CommandRequest> recorded = ArchiveTestSupport.readAll(archiveDirectory);
       assertEquals(List.of(new PlaceOrder(1L, Side.BID, 100L, 10L), new PlaceOrder(2L, Side.ASK, 99L, 4L)),
           recorded.stream().map(CommandRequest::command).toList());
@@ -300,11 +318,13 @@ class AeronEngineClientTest {
     }
   }
 
-  private static Process startClient(Path tempDir, Path clientLog) throws IOException {
+  private static Process startClient(Path tempDir, Path clientLog, String... args) throws IOException {
     String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
-    return new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+    List<String> command = new ArrayList<>(List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
         "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED", "-Djava.io.tmpdir=" + tempDir, "-cp", classpath,
-        AeronEngineClient.class.getName()).redirectErrorStream(true).redirectOutput(clientLog.toFile()).start();
+        AeronEngineClient.class.getName()));
+    command.addAll(List.of(args));
+    return new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(clientLog.toFile()).start();
   }
 
   private static FragmentHandler captureRequests(List<byte[]> messages) {
