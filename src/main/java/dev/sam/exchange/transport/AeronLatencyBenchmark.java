@@ -30,6 +30,7 @@ import io.aeron.protocol.DataHeaderFlyweight;
 public class AeronLatencyBenchmark {
   private static final int DEFAULT_WARMUP_COUNT = 500;
   private static final int DEFAULT_SAMPLE_COUNT = 2_000;
+  private static final int MAX_COUNT = 1_000_000;
   private static final CancelResult EXPECTED_RESULT = new CancelResult(1L, false);
 
   record Measurement(long[] latencies, long elapsedNanos, long threadCpuNanos, long processCpuNanos) {
@@ -46,9 +47,9 @@ public class AeronLatencyBenchmark {
     int warmupCount = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_WARMUP_COUNT;
     int sampleCount = args.length > 1 ? Integer.parseInt(args[1]) : DEFAULT_SAMPLE_COUNT;
     int maxInFlight = args.length > 2 ? Integer.parseInt(args[2]) : 1;
-    if (warmupCount < 0 || sampleCount < 1 || maxInFlight < 1) {
-      throw new IllegalArgumentException(
-          "Warmup count must be non-negative; sample count and max in flight must be positive");
+    if (warmupCount < 0 || warmupCount > MAX_COUNT || sampleCount < 1 || sampleCount > MAX_COUNT || maxInFlight < 1) {
+      throw new IllegalArgumentException("Warmup count must be between 0 and " + MAX_COUNT
+          + "; sample count must be between 1 and " + MAX_COUNT + "; max in flight must be positive");
     }
     String idleMode = args.length > 3 ? args[3] : "sleep";
     IdleStrategy idle = idleStrategy(idleMode);
@@ -107,8 +108,9 @@ public class AeronLatencyBenchmark {
 
   static Measurement measure(AeronRequestClient client, int count, int maxInFlight, NanoClock clock,
       IdleStrategy idle) {
-    if (count < 0 || maxInFlight < 1) {
-      throw new IllegalArgumentException("Sample count must be non-negative and max in flight must be positive");
+    if (count < 0 || count > MAX_COUNT || maxInFlight < 1) {
+      throw new IllegalArgumentException(
+          "Sample count must be between 0 and " + MAX_COUNT + "; max in flight must be positive");
     }
     long[] latencies = new long[count];
     Map<UUID, PendingSample> inFlight = new LinkedHashMap<>();
