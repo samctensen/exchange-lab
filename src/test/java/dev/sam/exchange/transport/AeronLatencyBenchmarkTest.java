@@ -36,6 +36,39 @@ import io.aeron.driver.MediaDriver;
 
 @Timeout(20)
 class AeronLatencyBenchmarkTest {
+  @Test
+  void helpExitsWithoutConnectingOrCreatingTransportResources(@TempDir Path tempDir) throws Exception {
+    Path log = tempDir.resolve("help.log");
+    Process benchmark = startMain(tempDir, log, AeronLatencyBenchmark.class, "--help");
+    try {
+      assertTrue(benchmark.waitFor(3, TimeUnit.SECONDS), "Help must not wait for an Aeron driver");
+      String output = Files.readString(log);
+      assertEquals(0, benchmark.exitValue(), output);
+      for (String option : List.of("warmupCount", "sampleCount", "maxInFlight", "sleep|spin", "--archive-counters",
+          "--aeron-directory=", "--help", "1000000", "default: 500", "default: 2000", "default: 1", "default: sleep",
+          "java.io.tmpdir/exchange-lab-aeron")) {
+        assertTrue(output.contains(option), "Help is missing " + option + "\n" + output);
+      }
+      assertFalse(output.contains("Samples:"), output);
+      assertFalse(output.contains("Exception"), output);
+      try (var files = Files.list(tempDir)) {
+        assertEquals(List.of(log), files.toList(), "Help must not create any transport resources");
+      }
+    } finally {
+      stopIfAlive(benchmark);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"0", "--archive-counters", "--help", "--unknown", "--aeron-directory=driver"})
+  void helpRejectsOtherArgumentsBeforeConnecting(String other) {
+    for (String[] arguments : List.of(new String[]{"--help", other}, new String[]{other, "--help"})) {
+      IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+          () -> AeronLatencyBenchmark.main(arguments));
+      assertTrue(failure.getMessage().contains("--help must be used alone"), failure.getMessage());
+    }
+  }
+
   @ParameterizedTest
   @ValueSource(ints = {0, 2, 4})
   void connectsToTheConfiguredEngineDirectoryWithFlagsAmongPositionals(int flagPosition, @TempDir Path tempDir)

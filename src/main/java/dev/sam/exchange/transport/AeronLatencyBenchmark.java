@@ -36,6 +36,28 @@ public class AeronLatencyBenchmark {
   }
 
   public static void main(String[] args) {
+    if (Arrays.asList(args).contains("--help")) {
+      if (args.length != 1)
+        throw new IllegalArgumentException("--help must be used alone");
+      System.out.println("""
+          Usage: AeronLatencyBenchmark [warmupCount] [sampleCount] [maxInFlight] [sleep|spin] [options]
+          Start a separate AeronEngineServer with a fresh, empty archive and --quiet before benchmarking.
+
+            warmupCount          Completed requests before measurement, 0..1000000 (default: 500)
+            sampleCount          Measured requests, 1..1000000 (default: 2000)
+            maxInFlight          Maximum outstanding requests, positive integer (default: 1)
+            sleep|spin           Client polling idle strategy (default: sleep)
+            --archive-counters   Report Archive write counters (default: disabled)
+            --aeron-directory=p  Existing engine Media Driver directory
+                                  (default: java.io.tmpdir/exchange-lab-aeron)
+            --help               Print this help and exit; use by itself
+
+          Named options may appear before, between, or after positional arguments.
+          Each send and reply wait has a 5-second timeout, with one attempt per request.
+          Failed runs do not print performance statistics.
+          """);
+      return;
+    }
     BenchmarkConfig config = BenchmarkConfig.parse(args);
     int warmupCount = config.warmupCount();
     int sampleCount = config.sampleCount();
