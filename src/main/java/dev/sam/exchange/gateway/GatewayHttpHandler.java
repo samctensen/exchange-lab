@@ -37,6 +37,8 @@ final class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpReque
       failure = HttpResponseStatus.NOT_FOUND;
     else if (!request.method().equals(HttpMethod.GET) && !(health && request.method().equals(HttpMethod.HEAD)))
       failure = HttpResponseStatus.METHOD_NOT_ALLOWED;
+    else if (health && request.content().isReadable())
+      failure = HttpResponseStatus.BAD_REQUEST;
     else if (request.headers().getAll(HttpHeaderNames.ORIGIN).size() > 1
         || !allowedOrigin(request.headers().get(HttpHeaderNames.ORIGIN)))
       failure = HttpResponseStatus.FORBIDDEN;
@@ -44,6 +46,8 @@ final class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpReque
       var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, failure);
       response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0).set(HttpHeaderNames.CONNECTION,
           HttpHeaderValues.CLOSE);
+      if (health)
+        response.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-store");
       if (failure.equals(HttpResponseStatus.METHOD_NOT_ALLOWED))
         response.headers().set(HttpHeaderNames.ALLOW, health ? "GET, HEAD" : HttpMethod.GET.name());
       ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
@@ -54,7 +58,8 @@ final class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpReque
       var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
           available ? HttpResponseStatus.OK : HttpResponseStatus.SERVICE_UNAVAILABLE,
           request.method().equals(HttpMethod.HEAD) ? Unpooled.EMPTY_BUFFER : Unpooled.wrappedBuffer(body));
-      response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json; charset=utf-8")
+      response.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-store")
+          .set(HttpHeaderNames.CONTENT_TYPE, "application/json; charset=utf-8")
           .setInt(HttpHeaderNames.CONTENT_LENGTH, body.length).set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
       ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
     } else {

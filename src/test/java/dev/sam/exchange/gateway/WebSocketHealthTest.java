@@ -5,15 +5,19 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 import org.agrona.concurrent.SleepingIdleStrategy;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import dev.sam.exchange.transport.AeronRequestClient;
 import io.aeron.Aeron;
@@ -67,12 +71,37 @@ class WebSocketHealthTest {
     }
   }
 
+  @ParameterizedTest
+  @MethodSource("malformedProbes")
+  void rejectsMalformedHttpAndProbeBodies(String headers, String body, String status) throws Exception {
+    try (EngineGateway gateway = new EngineGateway(new AeronRequestClient(null, null), 1);
+        WebSocketGateway server = new WebSocketGateway(gateway, 0)) {
+      server.start();
+      Response response = exchange(server.port(), "GET", "/health/ready", headers, body);
+      assertEquals("HTTP/1.1 " + status, response.status());
+      assertEquals("", response.body());
+      assertEquals("0", response.headers().get("Content-Length"));
+      if (status.startsWith("400"))
+        assertEquals("no-store", response.headers().get("Cache-Control"));
+    }
+  }
+
+  private static Stream<Arguments> malformedProbes() {
+    return Stream.of(Arguments.of("Content-Length: invalid\r\n", "", "400 Bad Request"),
+        Arguments.of("Content-Length: -1\r\n", "", "400 Bad Request"),
+        Arguments.of("Content-Length: 0\r\nContent-Length: 2\r\n", "{}", "400 Bad Request"),
+        Arguments.of("Content-Length: 2\r\n", "{}", "400 Bad Request"),
+        Arguments.of("Transfer-Encoding: chunked\r\n", "2\r\n{}\r\n0\r\n\r\n", "400 Bad Request"),
+        Arguments.of("Connection: close\r\nContent-Length: 16385\r\n", "", "413 Request Entity Too Large"));
+  }
+
   private static void assertResponse(Response response, String status, String body) {
     assertEquals("HTTP/1.1 " + status, response.status());
     assertEquals("application/json; charset=utf-8", response.headers().get("Content-Type"));
     assertEquals(Integer.toString(body.getBytes(StandardCharsets.UTF_8).length),
         response.headers().get("Content-Length"));
     assertEquals("close", response.headers().get("Connection"));
+    assertEquals("no-store", response.headers().get("Cache-Control"));
     assertEquals(body, response.body());
   }
 
