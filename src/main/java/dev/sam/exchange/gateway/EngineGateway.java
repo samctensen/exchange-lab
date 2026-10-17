@@ -56,6 +56,14 @@ public class EngineGateway implements AutoCloseable {
     this(client, capacity, 1);
   }
 
+  /**
+   * Observes a running worker and available transport without submitting work. Queue capacity
+   * is intentionally excluded; this is neither admission control nor a completion guarantee.
+   */
+  public boolean isReady() {
+    return state == State.RUNNING && worker.isAlive() && client.isTransportAvailable();
+  }
+
   public CompletableFuture<CommandResult> submit(CommandRequest request) {
     if (request == null) {
       throw new IllegalArgumentException("request must not be null");
