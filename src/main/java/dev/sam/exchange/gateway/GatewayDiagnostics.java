@@ -45,16 +45,28 @@ final class GatewayDiagnostics {
       offerTimeouts++;
   }
 
-  synchronized String summarize() {
-    return String.format(Locale.ROOT,
-        "Gateway diagnostics: lifetime (includes warmup and shutdown drain)%n"
-            + "Gateway accepted: %d%nGateway queue full: %d%nGateway activated: %d%n"
-            + "Gateway queue high-water (observed): %d%nGateway active high-water: %d%n"
-            + "Gateway queue wait mean: %.3f us%nGateway queue wait max: %.3f us%n"
-            + "Gateway successful offers: %d%nGateway retries: %d%n"
-            + "Gateway offer timeouts: %d%nGateway reply timeouts: %d%n",
-        accepted, queueFull, activated, queueHighWater, activeHighWater,
-        activated == 0 ? 0 : queueWaitNanos / (activated * 1000.0), maxQueueWaitNanos / 1000.0, offers, retries,
-        offerTimeouts, replyTimeouts);
+  synchronized Snapshot snapshot() {
+    return new Snapshot(accepted, queueFull, activated, queueWaitNanos, maxQueueWaitNanos, queueHighWater,
+        activeHighWater, offers, retries, offerTimeouts, replyTimeouts);
+  }
+
+  String summarize() {
+    return snapshot().summarize();
+  }
+
+  record Snapshot(long accepted, long queueFull, long activated, long queueWaitNanos, long maxQueueWaitNanos,
+      int queueHighWater, int activeHighWater, long offers, long retries, long offerTimeouts, long replyTimeouts) {
+    String summarize() {
+      return String.format(Locale.ROOT,
+          "Gateway diagnostics: lifetime (includes warmup and shutdown drain)%n"
+              + "Gateway accepted: %d%nGateway queue full: %d%nGateway activated: %d%n"
+              + "Gateway queue high-water (observed): %d%nGateway active high-water: %d%n"
+              + "Gateway queue wait mean: %.3f us%nGateway queue wait max: %.3f us%n"
+              + "Gateway successful offers: %d%nGateway retries: %d%n"
+              + "Gateway offer timeouts: %d%nGateway reply timeouts: %d%n",
+          accepted, queueFull, activated, queueHighWater, activeHighWater,
+          activated == 0 ? 0 : queueWaitNanos / (activated * 1000.0), maxQueueWaitNanos / 1000.0, offers, retries,
+          offerTimeouts, replyTimeouts);
+    }
   }
 }
