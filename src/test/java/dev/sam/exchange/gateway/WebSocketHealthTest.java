@@ -51,6 +51,14 @@ class WebSocketHealthTest {
       Response ready = exchange(server.port(), "GET", "/health/ready", "", "");
       assertResponse(ready, started ? "200 OK" : "503 Service Unavailable",
           started ? "{\"status\":\"ready\"}" : "{\"status\":\"not_ready\"}");
+      for (String path : new String[]{"/health/live", "/health/ready"}) {
+        Response get = path.equals("/health/live") ? live : ready;
+        Response head = exchange(server.port(), "HEAD", path, "", "");
+        assertEquals(get.status(), head.status());
+        assertEquals(get.headers().get("Content-Length"), head.headers().get("Content-Length"));
+        assertEquals(get.headers().get("Content-Type"), head.headers().get("Content-Type"));
+        assertEquals("", head.body());
+      }
       try (var websocket = new WebSocketTestClient(server.port())) {
         assertEquals(position, requests.position(), "Probes and a WebSocket handshake must not publish commands");
       }

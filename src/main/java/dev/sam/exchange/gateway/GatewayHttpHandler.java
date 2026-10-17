@@ -35,7 +35,7 @@ final class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpReque
       failure = HttpResponseStatus.BAD_REQUEST;
     else if (!health && !request.uri().equals("/orders"))
       failure = HttpResponseStatus.NOT_FOUND;
-    else if (!request.method().equals(HttpMethod.GET))
+    else if (!request.method().equals(HttpMethod.GET) && !(health && request.method().equals(HttpMethod.HEAD)))
       failure = HttpResponseStatus.METHOD_NOT_ALLOWED;
     else if (request.headers().getAll(HttpHeaderNames.ORIGIN).size() > 1
         || !allowedOrigin(request.headers().get(HttpHeaderNames.ORIGIN)))
@@ -52,7 +52,8 @@ final class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpReque
       String status = live ? "live" : available ? "ready" : "not_ready";
       byte[] body = ("{\"status\":\"" + status + "\"}").getBytes(StandardCharsets.UTF_8);
       var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
-          available ? HttpResponseStatus.OK : HttpResponseStatus.SERVICE_UNAVAILABLE, Unpooled.wrappedBuffer(body));
+          available ? HttpResponseStatus.OK : HttpResponseStatus.SERVICE_UNAVAILABLE,
+          request.method().equals(HttpMethod.HEAD) ? Unpooled.EMPTY_BUFFER : Unpooled.wrappedBuffer(body));
       response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json; charset=utf-8")
           .setInt(HttpHeaderNames.CONTENT_LENGTH, body.length).set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
       ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
