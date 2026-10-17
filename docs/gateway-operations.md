@@ -59,6 +59,11 @@ Use `--port=0` to select an available port and read the actual endpoint from the
 startup output. Multiple gateways can share an engine with different ports; each
 has its own Aeron response route.
 
+HTTP `/health/live` and `/health/ready` are available on that same port. Use them
+to check the listener and gateway availability without sending engine commands.
+See [health checks](gateway-health.md) for curl commands, response codes, and
+the limits of a successful readiness probe.
+
 In Zed, the class play button can launch the same main classes. Supply the gateway
 flags as program arguments and keep the `--add-opens` JVM option. **⌘J** switches
 between the editor and its terminal.

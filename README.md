@@ -120,6 +120,10 @@ shared runners.
 See [gateway operations](docs/gateway-operations.md) for launcher help, driver selection,
 timeout/retry settings, and terminal commands.
 
+Use HTTP `/health/live` and `/health/ready` on the gateway port to check its listener
+and Aeron availability without submitting an order. See [health checks](docs/gateway-health.md)
+for GET/HEAD examples and what readiness can guarantee.
+
 This endpoint is local-only and has no authentication or TLS. Each gateway has its own
 Aeron response route; use different `--port` values when running multiple gateway instances.
 The engine queues replies separately for each Aeron client connection. A stalled gateway does
