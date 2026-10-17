@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -32,10 +34,12 @@ import dev.sam.exchange.transport.AeronRequestClient;
 import dev.sam.exchange.transport.ClientConfig;
 import dev.sam.exchange.transport.CommandRequest;
 import dev.sam.exchange.transport.CommandResponse;
+import io.aeron.Publication;
 
 @Timeout(10)
 class EngineGatewayDiagnosticsTest {
   @Test
+  @SuppressWarnings("try") // Explicit close exercises post-close admission while retaining failure cleanup.
   void lifecycleRejectionsDoNotInflateAcceptedOrQueueFull() throws Exception {
     var diagnostics = new GatewayDiagnostics();
     var client = new ControlledClient();
@@ -130,6 +134,109 @@ class EngineGatewayDiagnosticsTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(longs = {Publication.CLOSED, Publication.MAX_POSITION_EXCEEDED, Publication.BACK_PRESSURED, 128})
+  void terminalFailuresAreCountedOnceBeforeCompletionCallbacks(long offerResult) throws Exception {
+    var diagnostics = new GatewayDiagnostics();
+    var client = new ControlledClient(new ClientConfig(Duration.ofMillis(20), 2));
+    client.sendResult = offerResult;
+    client.pollRelease.countDown();
+    try (var gateway = new EngineGateway(client, 1, 1, diagnostics)) {
+      gateway.start();
+      var future = gateway.submit(request(1));
+      var observed = future.handle((result, error) -> diagnostics.snapshot());
+      assertThrows(ExecutionException.class, () -> future.get(3, TimeUnit.SECONDS));
+      var snapshot = observed.get(3, TimeUnit.SECONDS);
+      assertEquals(1, snapshot.failed());
+      assertEquals(0, snapshot.completed());
+      assertEquals(offerResult >= 0 ? 2 : 0, snapshot.replyTimeouts());
+      assertEquals(offerResult == Publication.BACK_PRESSURED ? 1 : 0, snapshot.offerTimeouts());
+      assertTrue(snapshot.summarize().contains("Gateway failed: 1"));
+    }
+    assertEquals(1, diagnostics.snapshot().failed());
+  }
+
+  @Test
+  void retrySendTimeoutCountsOneTerminalFailure() throws Exception {
+    var diagnostics = new GatewayDiagnostics();
+    var client = new ControlledClient(new ClientConfig(Duration.ofMillis(80), 3));
+    client.pollRelease.countDown();
+    try (var gateway = new EngineGateway(client, 1, 1, diagnostics)) {
+      gateway.start();
+      var future = gateway.submit(request(1));
+      assertNotNull(client.offered.poll(3, TimeUnit.SECONDS));
+      client.sendResult = Publication.BACK_PRESSURED;
+      assertThrows(ExecutionException.class, () -> future.get(3, TimeUnit.SECONDS));
+      assertEquals(1, diagnostics.snapshot().failed());
+      assertEquals(1, diagnostics.snapshot().offers());
+      assertEquals(1, diagnostics.snapshot().replyTimeouts());
+      assertEquals(1, diagnostics.snapshot().offerTimeouts());
+    }
+  }
+
+  @Test
+  void workerStopCountsActiveAndQueuedFailuresBeforeReentrantCallbacks() throws Exception {
+    var diagnostics = new GatewayDiagnostics();
+    var client = new ControlledClient();
+    client.pollRelease.countDown();
+    try (var gateway = new EngineGateway(client, 2, 1, diagnostics)) {
+      gateway.start();
+      var active = gateway.submit(request(1));
+      assertNotNull(client.offered.poll(3, TimeUnit.SECONDS));
+      var second = gateway.submit(request(2));
+      var third = gateway.submit(request(3));
+      var firstObserved = active.handle((result, error) -> {
+        assertRejected(gateway, 90);
+        return diagnostics.snapshot();
+      });
+      var secondObserved = second.handle((result, error) -> diagnostics.snapshot());
+      var thirdObserved = third.handle((result, error) -> diagnostics.snapshot());
+      client.pollFailure = new IllegalStateException("transport stopped");
+      assertEquals(1, firstObserved.get(3, TimeUnit.SECONDS).failed());
+      assertEquals(2, secondObserved.get(3, TimeUnit.SECONDS).failed());
+      assertEquals(3, thirdObserved.get(3, TimeUnit.SECONDS).failed());
+      assertTrue(active.isCompletedExceptionally());
+      assertTrue(second.isCompletedExceptionally());
+      assertTrue(third.isCompletedExceptionally());
+    }
+    assertEquals(3, diagnostics.snapshot().accepted());
+    assertEquals(3, diagnostics.snapshot().failed());
+    assertEquals(0, diagnostics.snapshot().completed());
+    assertEquals(1, diagnostics.snapshot().notRunning());
+  }
+
+  @Test
+  void admissionDuringDrainIsCountedAsNotRunning() throws Exception {
+    var diagnostics = new GatewayDiagnostics();
+    var client = new ControlledClient();
+    client.pollRelease.countDown();
+    try (var gateway = new EngineGateway(client, 1, 1, diagnostics)) {
+      gateway.start();
+      var accepted = gateway.submit(request(1));
+      assertNotNull(client.offered.poll(3, TimeUnit.SECONDS));
+      var closed = new CompletableFuture<Void>();
+      Thread closer = Thread.ofPlatform().start(() -> {
+        try {
+          gateway.close();
+          closed.complete(null);
+        } catch (Throwable failure) {
+          closed.completeExceptionally(failure);
+        }
+      });
+      long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
+      while (closer.getState() != Thread.State.WAITING && System.nanoTime() - deadline < 0)
+        Thread.yield();
+      assertEquals(Thread.State.WAITING, closer.getState());
+      assertRejected(gateway, 2);
+      assertEquals(1, diagnostics.snapshot().notRunning());
+      assertEquals(0, diagnostics.snapshot().queueFull());
+      assertEquals(1, diagnostics.snapshot().accepted());
+      client.replies.add(new CommandResponse(request(1).requestId(), new CancelResult(1, false)));
+      accepted.get(3, TimeUnit.SECONDS);
+      closed.get(3, TimeUnit.SECONDS);
+    }
+  }
+
   private static void assertRejected(EngineGateway gateway, long id) {
     var failure = assertThrows(CompletionException.class, () -> gateway.submit(request(id)).join());
     assertInstanceOf(RejectedExecutionException.class, failure.getCause());
@@ -155,14 +262,22 @@ class EngineGatewayDiagnosticsTest {
     final ConcurrentLinkedQueue<CommandResponse> replies = new ConcurrentLinkedQueue<>();
     volatile RuntimeException pollFailure;
     volatile boolean automaticReplies;
+    volatile long sendResult = 128;
     private final SbeRequestCodec codec = new SbeRequestCodec();
 
     ControlledClient() {
-      super(null, null, new ClientConfig(Duration.ofSeconds(3), 1));
+      this(new ClientConfig(Duration.ofSeconds(3), 1));
+    }
+
+    ControlledClient(ClientConfig config) {
+      super(null, null, config);
     }
 
     @Override
     public long trySend(DirectBuffer buffer, int offset, int length) {
+      long result = sendResult;
+      if (result < 0)
+        return result;
       var request = codec.decode(buffer, offset, length);
       offered.add(request);
       if (automaticReplies)

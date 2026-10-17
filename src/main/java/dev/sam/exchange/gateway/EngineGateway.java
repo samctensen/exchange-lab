@@ -122,10 +122,14 @@ public class EngineGateway implements AutoCloseable {
         iterator.remove();
         String message = "Gateway worker stopped; request " + active.pending.request().requestId()
             + (active.attempts > 0 ? "; outcome unknown" : "");
+        if (diagnostics != null)
+          diagnostics.failed();
         active.pending.result().completeExceptionally(new IllegalStateException(message, failure));
       }
       PendingRequest pending;
       while ((pending = requests.poll()) != null) {
+        if (diagnostics != null)
+          diagnostics.failed();
         pending.result().completeExceptionally(new IllegalStateException("Gateway worker stopped", failure));
       }
     }
@@ -235,6 +239,8 @@ public class EngineGateway implements AutoCloseable {
           iterator.remove();
           String message = "Offer failed for " + active.pending.request().requestId() + "; result=" + result
               + (active.attempts > 0 ? "; outcome unknown" : "");
+          if (diagnostics != null)
+            diagnostics.failed();
           active.pending.result().completeExceptionally(new IllegalStateException(message));
           workCounter++;
         } else {
@@ -258,6 +264,8 @@ public class EngineGateway implements AutoCloseable {
         iterator.remove();
         String message = "Offer failed for " + active.pending.request().requestId() + "; sending timed out"
             + (active.attempts > 0 ? "; outcome unknown" : "");
+        if (diagnostics != null)
+          diagnostics.failed();
         active.pending.result().completeExceptionally(new IllegalStateException(message));
         workCounter++;
       } else if (active.phase == InFlightRequest.Phase.AWAITING_REPLY && active.attempts < maxAttempts) {
@@ -272,6 +280,8 @@ public class EngineGateway implements AutoCloseable {
         iterator.remove();
         String message = "No reply after " + active.attempts + " attempts for request "
             + active.pending.request().requestId() + (active.attempts > 0 ? "; outcome unknown" : "");
+        if (diagnostics != null)
+          diagnostics.failed();
         active.pending.result().completeExceptionally(new IllegalStateException(message));
         workCounter++;
       }
