@@ -213,6 +213,8 @@ public class EngineGateway implements AutoCloseable {
   private void handleResponse(CommandResponse response) {
     InFlightRequest active = inFlight.get(response.requestId());
     if (active == null || active.attempts == 0) {
+      if (diagnostics != null)
+        diagnostics.unmatchedResponse();
       return;
     }
     inFlight.remove(response.requestId());

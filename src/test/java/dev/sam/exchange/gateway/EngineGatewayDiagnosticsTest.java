@@ -1,6 +1,7 @@
 package dev.sam.exchange.gateway;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -159,13 +160,13 @@ class EngineGatewayDiagnosticsTest {
   @Test
   void retrySendTimeoutCountsOneTerminalFailure() throws Exception {
     var diagnostics = new GatewayDiagnostics();
-    var client = new ControlledClient(new ClientConfig(Duration.ofMillis(80), 3));
+    var client = new ControlledClient(new ClientConfig(Duration.ofMillis(20), 3));
+    client.backPressureAfterFirstOffer = true;
     client.pollRelease.countDown();
     try (var gateway = new EngineGateway(client, 1, 1, diagnostics)) {
       gateway.start();
       var future = gateway.submit(request(1));
       assertNotNull(client.offered.poll(3, TimeUnit.SECONDS));
-      client.sendResult = Publication.BACK_PRESSURED;
       assertThrows(ExecutionException.class, () -> future.get(3, TimeUnit.SECONDS));
       assertEquals(1, diagnostics.snapshot().failed());
       assertEquals(1, diagnostics.snapshot().offers());
@@ -237,6 +238,64 @@ class EngineGatewayDiagnosticsTest {
     }
   }
 
+  @Test
+  void unmatchedDuplicateAndLateRepliesDoNotInflateCompletions() throws Exception {
+    var diagnostics = new GatewayDiagnostics();
+    var client = new ControlledClient(new ClientConfig(Duration.ofMillis(80), 1));
+    client.automaticReplies = true;
+    client.pollRelease.countDown();
+    try (var gateway = new EngineGateway(client, 1, 1, diagnostics)) {
+      gateway.start();
+      var first = gateway.submit(request(1));
+      assertNotNull(client.offered.poll(3, TimeUnit.SECONDS));
+      var response = new CommandResponse(request(1).requestId(), new CancelResult(1, false));
+      assertEquals(new CancelResult(1, false), first.get(3, TimeUnit.SECONDS));
+      assertNotNull(client.delivered.poll(3, TimeUnit.SECONDS));
+      client.replies.add(response);
+      client.replies.add(new CommandResponse(request(90).requestId(), new CancelResult(90, false)));
+      assertNotNull(client.delivered.poll(3, TimeUnit.SECONDS));
+      assertNotNull(client.delivered.poll(3, TimeUnit.SECONDS));
+      assertEquals(2, diagnostics.snapshot().unmatchedResponses());
+      client.automaticReplies = false;
+      var expired = gateway.submit(request(2));
+      assertNotNull(client.offered.poll(3, TimeUnit.SECONDS));
+      assertThrows(ExecutionException.class, () -> expired.get(3, TimeUnit.SECONDS));
+      client.replies.add(new CommandResponse(request(2).requestId(), new CancelResult(2, false)));
+      assertNotNull(client.delivered.poll(3, TimeUnit.SECONDS));
+      var snapshot = diagnostics.snapshot();
+      assertEquals(3, snapshot.unmatchedResponses());
+      assertEquals(1, snapshot.completed());
+      assertEquals(1, snapshot.failed());
+      assertTrue(snapshot.summarize().contains("Gateway unmatched responses: 3"));
+    }
+  }
+
+  @Test
+  void responseForARequestNotYetOfferedIsDiscarded() throws Exception {
+    var diagnostics = new GatewayDiagnostics();
+    var client = new ControlledClient();
+    client.sendResult = Publication.BACK_PRESSURED;
+    client.pollRelease.countDown();
+    try (var gateway = new EngineGateway(client, 1, 1, diagnostics)) {
+      gateway.start();
+      var future = gateway.submit(request(1));
+      await(client.sendAttempted);
+      client.replies
+          .add(new CommandResponse(request(1).requestId(), new RejectResult(1, RejectReason.REQUEST_ID_CONFLICT)));
+      assertNotNull(client.delivered.poll(3, TimeUnit.SECONDS));
+      assertFalse(future.isDone());
+      assertEquals(1, diagnostics.snapshot().unmatchedResponses());
+      assertEquals(0, diagnostics.snapshot().completed());
+      client.sendResult = 128;
+      assertNotNull(client.offered.poll(3, TimeUnit.SECONDS));
+      client.replies.add(new CommandResponse(request(1).requestId(), new CancelResult(1, false)));
+      assertEquals(new CancelResult(1, false), future.get(3, TimeUnit.SECONDS));
+      assertEquals(1, diagnostics.snapshot().completed());
+      assertEquals(0, diagnostics.snapshot().businessRejected());
+      assertEquals(1, diagnostics.snapshot().unmatchedResponses());
+    }
+  }
+
   private static void assertRejected(EngineGateway gateway, long id) {
     var failure = assertThrows(CompletionException.class, () -> gateway.submit(request(id)).join());
     assertInstanceOf(RejectedExecutionException.class, failure.getCause());
@@ -256,6 +315,8 @@ class EngineGatewayDiagnosticsTest {
   }
 
   private static class ControlledClient extends AeronRequestClient {
+    final CountDownLatch sendAttempted = new CountDownLatch(1);
+    final LinkedBlockingQueue<CommandResponse> delivered = new LinkedBlockingQueue<>();
     final CountDownLatch pollEntered = new CountDownLatch(1);
     final CountDownLatch pollRelease = new CountDownLatch(1);
     final LinkedBlockingQueue<CommandRequest> offered = new LinkedBlockingQueue<>();
@@ -263,6 +324,7 @@ class EngineGatewayDiagnosticsTest {
     volatile RuntimeException pollFailure;
     volatile boolean automaticReplies;
     volatile long sendResult = 128;
+    boolean backPressureAfterFirstOffer;
     private final SbeRequestCodec codec = new SbeRequestCodec();
 
     ControlledClient() {
@@ -276,10 +338,13 @@ class EngineGatewayDiagnosticsTest {
     @Override
     public long trySend(DirectBuffer buffer, int offset, int length) {
       long result = sendResult;
+      sendAttempted.countDown();
       if (result < 0)
         return result;
       var request = codec.decode(buffer, offset, length);
       offered.add(request);
+      if (backPressureAfterFirstOffer)
+        sendResult = Publication.BACK_PRESSURED;
       if (automaticReplies)
         replies.add(new CommandResponse(request.requestId(),
             new CancelResult(((CancelOrder) request.command()).orderId(), false)));
@@ -296,6 +361,7 @@ class EngineGatewayDiagnosticsTest {
       CommandResponse response;
       while (work < fragmentLimit && (response = replies.poll()) != null) {
         onResponse.accept(response);
+        delivered.add(response);
         work++;
       }
       return work;
