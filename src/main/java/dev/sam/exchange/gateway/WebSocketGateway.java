@@ -2,7 +2,6 @@ package dev.sam.exchange.gateway;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.net.URI;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -10,27 +9,18 @@ import java.util.concurrent.atomic.AtomicInteger;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
-import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
-import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.handler.codec.http.DefaultFullHttpResponse;
-import io.netty.handler.codec.http.FullHttpRequest;
-import io.netty.handler.codec.http.HttpHeaderNames;
-import io.netty.handler.codec.http.HttpHeaderValues;
-import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpObjectAggregator;
-import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpServerCodec;
-import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrameAggregator;
 import io.netty.handler.codec.http.websocketx.WebSocketFrameEncoder;
@@ -84,7 +74,7 @@ public final class WebSocketGateway implements AutoCloseable {
               pipeline.addLast(new IdleStateHandler(60, 0, 0));
               pipeline.addLast(new HttpServerCodec());
               pipeline.addLast(new HttpObjectAggregator(MAX_MESSAGE_BYTES));
-              pipeline.addLast(new LocalUpgradeGuard());
+              pipeline.addLast(new GatewayHttpHandler(gateway::isReady));
               pipeline.addLast(new WebSocketServerProtocolHandler(WebSocketServerProtocolConfig.newBuilder()
                   .websocketPath("/orders").maxFramePayloadLength(MAX_MESSAGE_BYTES).allowExtensions(false)
                   .handshakeTimeoutMillis(5000).build()));
@@ -136,44 +126,4 @@ public final class WebSocketGateway implements AutoCloseable {
     workers.shutdownGracefully(0, 2, TimeUnit.SECONDS).syncUninterruptibly();
   }
 
-  /** Prevent an unrelated website from using a browser to submit to the unauthenticated local demo. */
-  private static final class LocalUpgradeGuard extends SimpleChannelInboundHandler<FullHttpRequest> {
-    @Override
-    protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request) {
-      HttpResponseStatus failure = null;
-      if (!request.decoderResult().isSuccess())
-        failure = HttpResponseStatus.BAD_REQUEST;
-      else if (!request.uri().equals("/orders"))
-        failure = HttpResponseStatus.NOT_FOUND;
-      else if (!request.method().equals(HttpMethod.GET))
-        failure = HttpResponseStatus.METHOD_NOT_ALLOWED;
-      else if (request.headers().getAll(HttpHeaderNames.ORIGIN).size() > 1
-          || !allowedOrigin(request.headers().get(HttpHeaderNames.ORIGIN)))
-        failure = HttpResponseStatus.FORBIDDEN;
-      if (failure != null) {
-        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, failure);
-        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0).set(HttpHeaderNames.CONNECTION,
-            HttpHeaderValues.CLOSE);
-        if (failure.equals(HttpResponseStatus.METHOD_NOT_ALLOWED))
-          response.headers().set(HttpHeaderNames.ALLOW, HttpMethod.GET.name());
-        ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
-      } else {
-        ctx.fireChannelRead(request.retain());
-      }
-    }
-
-    private boolean allowedOrigin(String origin) {
-      if (origin == null)
-        return true; // Native clients do not send browser Origin headers. This is not authentication.
-      try {
-        URI uri = URI.create(origin);
-        return ("http".equals(uri.getScheme()) || "https".equals(uri.getScheme()))
-            && ("localhost".equals(uri.getHost()) || "127.0.0.1".equals(uri.getHost())) && uri.getRawUserInfo() == null
-            && uri.getPort() <= 65535 && !uri.getRawAuthority().endsWith(":") && uri.getRawQuery() == null
-            && uri.getRawFragment() == null && (uri.getRawPath() == null || uri.getRawPath().isEmpty());
-      } catch (IllegalArgumentException invalid) {
-        return false;
-      }
-    }
-  }
 }

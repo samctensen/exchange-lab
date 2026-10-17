@@ -16,6 +16,9 @@ import org.agrona.concurrent.UnsafeBuffer;
 import org.agrona.concurrent.status.CountersManager;
 import org.agrona.concurrent.status.CountersReader;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class ArchiveWriteCountersTest {
   @Test
@@ -47,6 +50,150 @@ class ArchiveWriteCountersTest {
     var sample = reader.awaitSnapshot(64, f.clock, f.clock);
     assertEquals(new ArchiveWriteCounters.Snapshot(64, 3_000, 2_000), sample);
     assertTrue(f.clock.now >= TimeUnit.MILLISECONDS.toNanos(25));
+  }
+
+  @Test
+  void rejectsAnAlreadyInterruptedSnapshotWaitWithoutClearingTheFlag() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.values(64, 3_000, 2_000);
+    Thread.currentThread().interrupt();
+    try {
+      IllegalStateException error = assertThrows(IllegalStateException.class,
+          () -> reader.awaitSnapshot(64, f.clock, f.clock));
+      assertTrue(error.getMessage().contains("Interrupted"), error.getMessage());
+      assertTrue(Thread.currentThread().isInterrupted());
+      assertEquals(0, f.clock.now);
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  @Test
+  void abortsAnInterruptedWaitBeforeAnotherIdle() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.clock.onIdle = () -> {
+      if (f.clock.now == TimeUnit.MILLISECONDS.toNanos(5))
+        Thread.currentThread().interrupt();
+    };
+    try {
+      IllegalStateException error = assertThrows(IllegalStateException.class,
+          () -> reader.awaitSnapshot(64, f.clock, f.clock));
+      assertTrue(error.getMessage().contains("Interrupted"), error.getMessage());
+      assertTrue(Thread.currentThread().isInterrupted());
+      assertEquals(TimeUnit.MILLISECONDS.toNanos(5), f.clock.now);
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  @Test
+  void rejectsInterruptionAtTheStableSnapshotBoundary() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.values(64, 3_000, 2_000);
+    f.clock.onRead = () -> {
+      if (f.clock.now == TimeUnit.MILLISECONDS.toNanos(20))
+        Thread.currentThread().interrupt();
+    };
+    try {
+      IllegalStateException error = assertThrows(IllegalStateException.class,
+          () -> reader.awaitSnapshot(64, f.clock, f.clock));
+      assertTrue(error.getMessage().contains("Interrupted"), error.getMessage());
+      assertTrue(Thread.currentThread().isInterrupted());
+      assertEquals(TimeUnit.MILLISECONDS.toNanos(20), f.clock.now);
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(longs = {-1, Long.MIN_VALUE})
+  void rejectsNegativeExpectedBytesBeforeConsultingTheClock(long expectedBytes) {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.clock.onRead = () -> {
+      throw new AssertionError("Clock accessed for invalid expected bytes");
+    };
+    f.clock.onIdle = () -> {
+      throw new AssertionError("Idled for invalid expected bytes");
+    };
+    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        () -> reader.awaitSnapshot(expectedBytes, f.clock, f.clock));
+    assertTrue(error.getMessage().contains("expectedBytes"), error.getMessage());
+  }
+
+  @Test
+  void acceptsAZeroByteSnapshot() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    assertEquals(new ArchiveWriteCounters.Snapshot(0, 0, 0), reader.awaitSnapshot(0, f.clock, f.clock));
+  }
+
+  @Test
+  void acceptsTheLargestPositiveExpectedByteCount() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.values(Long.MAX_VALUE, 3_000, 2_000);
+    assertEquals(new ArchiveWriteCounters.Snapshot(Long.MAX_VALUE, 3_000, 2_000),
+        reader.awaitSnapshot(Long.MAX_VALUE, f.clock, f.clock));
+  }
+
+  @ParameterizedTest
+  @CsvSource({"32, 100, 80", "64, 90, 80", "64, 100, 70"})
+  void rejectsEachCounterDecreaseDuringTheSnapshotWait(long bytes, long totalNanos, long maxNanos) {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.values(64, 100, 80);
+    f.clock.onIdle = () -> {
+      if (f.clock.now == TimeUnit.MILLISECONDS.toNanos(5))
+        f.values(bytes, totalNanos, maxNanos);
+    };
+    IllegalStateException error = assertThrows(IllegalStateException.class,
+        () -> reader.awaitSnapshot(64, f.clock, f.clock));
+    assertTrue(error.getMessage().contains("decreased"), error.getMessage());
+    assertEquals(TimeUnit.MILLISECONDS.toNanos(5), f.clock.now);
+  }
+
+  @Test
+  void settlesAfterIndependentCounterIncreases() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.values(32, 0, 0);
+    f.clock.onIdle = () -> {
+      if (f.clock.now == TimeUnit.MILLISECONDS.toNanos(5))
+        f.counters.setCounterValue(f.bytes, 64);
+      if (f.clock.now == TimeUnit.MILLISECONDS.toNanos(8))
+        f.counters.setCounterValue(f.max, 20);
+      if (f.clock.now == TimeUnit.MILLISECONDS.toNanos(11))
+        f.counters.setCounterValue(f.time, 30);
+    };
+    assertEquals(new ArchiveWriteCounters.Snapshot(64, 30, 20), reader.awaitSnapshot(64, f.clock, f.clock));
+    assertEquals(TimeUnit.MILLISECONDS.toNanos(31), f.clock.now);
+  }
+
+  @Test
+  void settlesAcrossTheNanoClockWrap() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    long started = Long.MAX_VALUE - TimeUnit.MILLISECONDS.toNanos(10);
+    f.clock.now = started;
+    f.values(64, 30, 20);
+    assertEquals(new ArchiveWriteCounters.Snapshot(64, 30, 20), reader.awaitSnapshot(64, f.clock, f.clock));
+    assertEquals(TimeUnit.MILLISECONDS.toNanos(20), f.clock.now - started);
+  }
+
+  @Test
+  void timesOutAcrossTheNanoClockWrap() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    long started = Long.MAX_VALUE - TimeUnit.SECONDS.toNanos(1);
+    f.clock.now = started;
+    IllegalStateException error = assertThrows(IllegalStateException.class,
+        () -> reader.awaitSnapshot(64, f.clock, f.clock));
+    assertTrue(error.getMessage().contains("Timed out"), error.getMessage());
+    assertEquals(TimeUnit.SECONDS.toNanos(5), f.clock.now - started);
   }
 
   @Test
@@ -104,12 +251,72 @@ class ArchiveWriteCountersTest {
     assertThrows(IllegalStateException.class, () -> reader.awaitSnapshot(64, f.clock, f.clock));
   }
 
+  @ParameterizedTest
+  @CsvSource({"-1, 0, 0, 0, 0, 0", "0, -1, 0, 0, 0, 0", "0, 0, -1, 0, 0, 0", "0, 0, 0, -1, 0, 0", "0, 0, 0, 0, -1, 0",
+      "0, 0, 0, 0, 0, -1"})
+  void rejectsNegativeFieldsInEitherSummarySnapshot(long beforeBytes, long beforeTotal, long beforeMax, long afterBytes,
+      long afterTotal, long afterMax) {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    var before = new ArchiveWriteCounters.Snapshot(beforeBytes, beforeTotal, beforeMax);
+    var after = new ArchiveWriteCounters.Snapshot(afterBytes, afterTotal, afterMax);
+    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        () -> reader.summarize(before, after, 1_000));
+    assertTrue(error.getMessage().contains("non-negative"), error.getMessage());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"-1, 0, 0", "0, -1, 0", "0, 0, -1"})
+  void stillReportsInvalidLiveCounterValuesAsIllegalState(long bytes, long totalNanos, long maxNanos) {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.values(bytes, totalNanos, maxNanos);
+    IllegalStateException error = assertThrows(IllegalStateException.class,
+        () -> reader.awaitSnapshot(64, f.clock, f.clock));
+    assertTrue(error.getMessage().contains("invalid"), error.getMessage());
+  }
+
   @Test
-  void rejectsDecreasingTotalsRatherThanPrintingNegativeDeltas() {
+  void summarizesZeroValuedSnapshots() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    var zero = new ArchiveWriteCounters.Snapshot(0, 0, 0);
+    assertEquals("""
+        Archive ID: 7
+        Archive write bytes (measured phase): 0
+        Archive write time (measured phase): 0 ns
+        Archive write time / client elapsed: 0.000%
+        Archive max write time before (lifetime): 0 ns
+        Archive max write time after (lifetime): 0 ns
+        """, reader.summarize(zero, zero, 1));
+  }
+
+  @Test
+  void permitsIndependentlyPublishedSummaryTimeCounters() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    String report = reader.summarize(new ArchiveWriteCounters.Snapshot(0, 0, 20),
+        new ArchiveWriteCounters.Snapshot(64, 30, 40), 100);
+    assertTrue(report.contains("Archive write time (measured phase): 30 ns"), report);
+    assertTrue(report.contains("Archive max write time after (lifetime): 40 ns"), report);
+  }
+
+  @ParameterizedTest
+  @ValueSource(longs = {0, -1, Long.MIN_VALUE})
+  void rejectsNonPositiveSummaryDuration(long elapsedNanos) {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    assertThrows(IllegalArgumentException.class, () -> reader.summarize(new ArchiveWriteCounters.Snapshot(0, 0, 0),
+        new ArchiveWriteCounters.Snapshot(64, 30, 20), elapsedNanos));
+  }
+
+  @ParameterizedTest
+  @CsvSource({"32, 100, 100", "128, 50, 100", "128, 100, 50"})
+  void rejectsDecreasingTotalsRatherThanPrintingNegativeDeltas(long bytes, long totalNanos, long maxNanos) {
     Fixture f = new Fixture();
     ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
     assertThrows(IllegalStateException.class, () -> reader.summarize(new ArchiveWriteCounters.Snapshot(64, 100, 100),
-        new ArchiveWriteCounters.Snapshot(128, 50, 100), 1_000));
+        new ArchiveWriteCounters.Snapshot(bytes, totalNanos, maxNanos), 1_000));
   }
 
   private static final class Fixture {
@@ -136,9 +343,12 @@ class ArchiveWriteCountersTest {
 
   private static final class TestClock implements NanoClock, IdleStrategy {
     long now;
+    Runnable onRead = () -> {
+    };
     Runnable onIdle = () -> {
     };
     public long nanoTime() {
+      onRead.run();
       return now;
     }
     public void idle() {

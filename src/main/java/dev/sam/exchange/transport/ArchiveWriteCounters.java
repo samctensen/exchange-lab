@@ -60,14 +60,21 @@ final class ArchiveWriteCounters {
   }
 
   Snapshot awaitSnapshot(long expectedBytes, NanoClock clock, IdleStrategy idle) {
+    if (expectedBytes < 0)
+      throw new IllegalArgumentException("expectedBytes must be non-negative");
     long started = clock.nanoTime();
     long stableSince = started;
     Snapshot previous = null;
     while (true) {
+      checkInterrupted();
       long now = clock.nanoTime();
       if (now - started >= TIMEOUT_NS)
         throw new IllegalStateException("Timed out waiting for Archive statistics at " + expectedBytes + " bytes");
       Snapshot sample = read();
+      if (previous != null
+          && (sample.bytes() < previous.bytes() || sample.totalWriteNanos() < previous.totalWriteNanos()
+              || sample.maxWriteNanos() < previous.maxWriteNanos()))
+        throw new IllegalStateException("Archive counters decreased while waiting for statistics");
       if (sample.bytes() > expectedBytes)
         throw new IllegalStateException("Unexpected Archive writes; use a fresh dedicated benchmark server");
       if (!sample.equals(previous)) {
@@ -76,10 +83,16 @@ final class ArchiveWriteCounters {
       }
       // RecordingPos can advance before the recorder publishes its statistics. These counters are not an atomic
       // tuple: require the expected byte total and a quiet observation period, outside the benchmark timers.
+      checkInterrupted();
       if (sample.bytes() == expectedBytes && now - stableSince >= SETTLE_NS)
         return sample;
       idle.idle();
     }
+  }
+
+  private static void checkInterrupted() {
+    if (Thread.currentThread().isInterrupted())
+      throw new IllegalStateException("Interrupted while waiting for Archive statistics");
   }
 
   private Snapshot read() {
@@ -105,6 +118,9 @@ final class ArchiveWriteCounters {
   String summarize(Snapshot before, Snapshot after, long elapsedNanos) {
     if (elapsedNanos <= 0)
       throw new IllegalArgumentException("Measured duration must be positive");
+    if (before.bytes() < 0 || before.totalWriteNanos() < 0 || before.maxWriteNanos() < 0 || after.bytes() < 0
+        || after.totalWriteNanos() < 0 || after.maxWriteNanos() < 0)
+      throw new IllegalArgumentException("Archive snapshot values must be non-negative");
     if (after.bytes() < before.bytes() || after.totalWriteNanos() < before.totalWriteNanos()
         || after.maxWriteNanos() < before.maxWriteNanos())
       throw new IllegalStateException("Archive counters decreased during measurement");

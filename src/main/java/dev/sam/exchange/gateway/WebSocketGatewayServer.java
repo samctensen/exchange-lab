@@ -30,17 +30,19 @@ public final class WebSocketGatewayServer {
                                  (default: java.io.tmpdir/exchange-lab-aeron)
             --timeout-ms=n       Timeout for each send and reply wait in milliseconds (default: 5000)
             --max-attempts=n     Total send attempts, including the first (default: 3; minimum: 1)
+            --diagnostics        Print aggregate lifetime counters after shutdown drain (default: off)
             --help               Print this help and exit; use by itself
           """);
       return;
     }
     Config config = Config.parse(args);
+    GatewayDiagnostics diagnostics = config.diagnostics() ? new GatewayDiagnostics() : null;
     Thread shutdownHook = null;
     try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(config.aeronDirectory()));
         Subscription replies = aeron.addSubscription("aeron:ipc?control-mode=response", 2);
         Publication requests = aeron.addPublication("aeron:ipc?response-correlation-id=" + replies.registrationId(), 1);
         EngineGateway gateway = new EngineGateway(new AeronRequestClient(requests, replies, config.clientConfig()),
-            config.queueCapacity(), config.maxInFlight());
+            config.queueCapacity(), config.maxInFlight(), diagnostics);
         WebSocketGateway server = new WebSocketGateway(gateway, config.port())) {
       gateway.start();
       server.start();
@@ -61,6 +63,9 @@ public final class WebSocketGatewayServer {
       System.out.println("Gateway max in flight: " + config.maxInFlight());
       server.awaitClose();
     } finally {
+      // Resource closure above drains the gateway before the lifetime counters are reported.
+      if (diagnostics != null)
+        System.out.print(diagnostics.summarize());
       if (shutdownHook != null) {
         try {
           Runtime.getRuntime().removeShutdownHook(shutdownHook);
@@ -71,7 +76,12 @@ public final class WebSocketGatewayServer {
     }
   }
 
-  record Config(int port, int queueCapacity, int maxInFlight, String aeronDirectory, ClientConfig clientConfig) {
+  record Config(int port, int queueCapacity, int maxInFlight, String aeronDirectory, ClientConfig clientConfig,
+      boolean diagnostics) {
+    Config(int port, int queueCapacity, int maxInFlight, String aeronDirectory, ClientConfig clientConfig) {
+      this(port, queueCapacity, maxInFlight, aeronDirectory, clientConfig, false);
+    }
+
     Config(int port, int queueCapacity, int maxInFlight) {
       this(port, queueCapacity, maxInFlight, defaultAeronDirectory(), ClientConfig.defaults());
     }
@@ -101,6 +111,7 @@ public final class WebSocketGatewayServer {
       String aeronDirectory = defaultAeronDirectory();
       Duration timeout = ClientConfig.defaults().timeout();
       int maxAttempts = ClientConfig.defaults().maxAttempts();
+      boolean diagnostics = false;
       var seen = new HashSet<String>();
       for (String arg : args) {
         String[] parts = arg.split("=", 2);
@@ -112,6 +123,11 @@ public final class WebSocketGatewayServer {
           case "--max-in-flight" -> maxInFlight = integerValue(parts);
           case "--aeron-directory" -> aeronDirectory = argumentValue(parts);
           case "--timeout-ms" -> timeout = timeoutValue(parts);
+          case "--diagnostics" -> {
+            if (parts.length != 1)
+              throw new IllegalArgumentException("--diagnostics does not take a value");
+            diagnostics = true;
+          }
           case "--max-attempts" -> {
             maxAttempts = integerValue(parts);
             if (maxAttempts < 1)
@@ -120,7 +136,8 @@ public final class WebSocketGatewayServer {
           default -> throw new IllegalArgumentException("Unknown gateway argument: " + parts[0]);
         }
       }
-      return new Config(port, queueCapacity, maxInFlight, aeronDirectory, new ClientConfig(timeout, maxAttempts));
+      return new Config(port, queueCapacity, maxInFlight, aeronDirectory, new ClientConfig(timeout, maxAttempts),
+          diagnostics);
     }
 
     private static Duration timeoutValue(String[] parts) {

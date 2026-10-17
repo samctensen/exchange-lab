@@ -19,14 +19,25 @@ import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.agrona.concurrent.AgentRunner;
+import org.agrona.concurrent.SleepingIdleStrategy;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import dev.sam.exchange.engine.CancelOrder;
+import dev.sam.exchange.engine.OrderBook;
+import dev.sam.exchange.engine.MatchingEngine;
+import dev.sam.exchange.persistence.ArchiveRequestLog;
+import dev.sam.exchange.persistence.ArchiveRuntime;
+import dev.sam.exchange.transport.AeronEngineAgent;
+import dev.sam.exchange.transport.RequestStateMachine;
+import dev.sam.exchange.transport.ResponsePublicationRegistry;
 import dev.sam.exchange.protocol.SbeRequestCodec;
 import dev.sam.exchange.transport.CommandRequest;
 import io.aeron.Aeron;
@@ -49,6 +60,125 @@ class WebSocketGatewayServerTest {
       } finally {
         stopGateway(gateway);
       }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  @Timeout(40)
+  void launcherDiagnosticsReportRecordedResultsOnlyWhenEnabled(boolean enabled) throws Exception {
+    Path output = temporaryDirectory.resolve("gateway-diagnostics.log");
+    Path archiveDirectory = temporaryDirectory.resolve("archive");
+    String driverDirectory = temporaryDirectory.resolve("recorded-driver").toString();
+    var state = new RequestStateMachine(new MatchingEngine(new OrderBook()));
+    var failure = new AtomicReference<Throwable>();
+    try (ArchiveRuntime runtime = ArchiveRuntime.launch(archiveDirectory, driverDirectory);
+        ArchiveRequestLog log = ArchiveRequestLog.open(runtime.archive(), state::process);
+        Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(driverDirectory));
+        Subscription requests = aeron.addSubscription("aeron:ipc", 1);
+        ResponsePublicationRegistry publications = new ResponsePublicationRegistry(aeron);
+        AgentRunner runner = new AgentRunner(new SleepingIdleStrategy(), error -> failure.compareAndSet(null, error),
+            null, new AeronEngineAgent(requests, publications, state, log, false))) {
+      AgentRunner.startOnThread(runner);
+      Process gateway = startGateway(output, driverDirectory, enabled ? new String[]{"--diagnostics"} : new String[0]);
+      try {
+        try (var client = new WebSocketTestClient(awaitEndpoint(gateway, output).getPort())) {
+          var placed = client.request(WebSocketGatewayTest.place(1, 101, "BID", 100, 5));
+          assertEquals("5", placed.getAsJsonObject("place").get("remainingLots").getAsString());
+          var rejected = client.request(WebSocketGatewayTest.place(2, 101, "BID", 100, 1));
+          assertEquals("DUPLICATE_ORDER_ID", rejected.getAsJsonObject("reject").get("reason").getAsString());
+        }
+        assertFalse(Files.readString(output).contains("Gateway diagnostics:"), "Summary must wait for shutdown");
+      } finally {
+        stopGateway(gateway);
+      }
+    }
+    assertNull(failure.get(), () -> "Engine agent failed: " + failure.get());
+    String report = Files.readString(output);
+    assertTrue(report.contains("Gateway queue capacity: 128"), report);
+    assertTrue(report.contains("Gateway max in flight: 8"), report);
+    assertEquals(enabled, report.contains("Gateway diagnostics:"), report);
+    if (enabled) {
+      assertEquals(1, report.lines().filter(line -> line.startsWith("Gateway diagnostics:")).count(), report);
+      for (String expected : List.of("Gateway accepted: 2", "Gateway completed: 2", "Gateway business rejected: 1",
+          "Gateway failed: 0", "Gateway unmatched responses: 0"))
+        assertTrue(report.lines().anyMatch(expected::equals), report);
+      assertFalse(report.contains(new UUID(0, 1).toString()), report);
+      assertFalse(report.contains("DUPLICATE_ORDER_ID"), report);
+    }
+    try (ArchiveRuntime runtime = ArchiveRuntime.launch(archiveDirectory, driverDirectory)) {
+      var recorded = new ArrayList<CommandRequest>();
+      ArchiveRequestLog.replay(runtime.archive(), recorded::add);
+      assertEquals(List.of(101L, 101L), recorded.stream().map(request -> request.command().orderId()).toList());
+    }
+  }
+
+  @Test
+  @Timeout(30)
+  void shutdownSummaryIncludesAcceptedRequestThatFailsDuringDrain() throws Exception {
+    Path output = temporaryDirectory.resolve("gateway-drain.log");
+    try (
+        MediaDriver driver = MediaDriver.launchEmbedded(new MediaDriver.Context()
+            .aeronDirectoryName(temporaryDirectory.resolve("drain-driver").toString()).dirDeleteOnShutdown(true));
+        Aeron engine = Aeron.connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()));
+        Subscription requests = engine.addSubscription("aeron:ipc", 1)) {
+      Process gateway = startGateway(output, driver.aeronDirectoryName(), "--diagnostics", "--timeout-ms=2000",
+          "--max-attempts=1");
+      try {
+        try (var client = new WebSocketTestClient(awaitEndpoint(gateway, output).getPort())) {
+          client.socket.sendText("""
+              {"requestId":"11111111-1111-4111-8111-111111111111","cancel":{"orderId":"1"}}
+              """, true).get(3, TimeUnit.SECONDS);
+          var received = new ArrayList<CommandRequest>();
+          var codec = new SbeRequestCodec();
+          long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+          while (received.isEmpty() && System.nanoTime() - deadline < 0) {
+            requests.poll((buffer, offset, length, header) -> received.add(codec.decode(buffer, offset, length)), 10);
+            if (received.isEmpty())
+              Thread.sleep(1);
+          }
+          assertEquals(1, received.size(), "Request must be accepted and offered before shutdown");
+          assertFalse(Files.readString(output).contains("Gateway diagnostics:"));
+          stopGateway(gateway);
+        }
+      } finally {
+        if (gateway.isAlive())
+          stopGateway(gateway);
+      }
+      String report = Files.readString(output);
+      for (String expected : List.of("Gateway accepted: 1", "Gateway completed: 0", "Gateway failed: 1",
+          "Gateway reply timeouts: 1"))
+        assertTrue(report.lines().anyMatch(expected::equals), report);
+      assertFalse(report.contains("11111111-1111-4111-8111-111111111111"), report);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"--diagnostics=true", "--diagnostics=false", "--diagnostics="})
+  void diagnosticsValueFormsFailBeforeConnectingToAeron(String argument) throws Exception {
+    assertInvalidDiagnosticsArgument(argument);
+  }
+
+  @Test
+  void duplicateDiagnosticsFlagFailsBeforeConnectingToAeron() throws Exception {
+    assertInvalidDiagnosticsArgument("--diagnostics", "--diagnostics");
+  }
+
+  private void assertInvalidDiagnosticsArgument(String... arguments) throws Exception {
+    Path missing = temporaryDirectory.resolve("missing-driver");
+    Path output = temporaryDirectory.resolve("invalid-diagnostics.log");
+    Process gateway = startGateway(output, missing.toString(), arguments);
+    try {
+      assertTrue(gateway.waitFor(3, TimeUnit.SECONDS), "Invalid diagnostics flag attempted an Aeron connection");
+      assertNotEquals(0, gateway.exitValue());
+      String report = Files.readString(output);
+      assertTrue(report.contains("--diagnostics"), report);
+      assertFalse(report.contains("Unknown gateway argument"), report);
+      assertFalse(report.contains("DriverTimeoutException"), report);
+      assertFalse(Files.exists(missing));
+    } finally {
+      if (gateway.isAlive())
+        stopGateway(gateway);
     }
   }
 
@@ -224,6 +354,7 @@ class WebSocketGatewayServerTest {
     assertTrue(usage.contains("--port"));
     assertTrue(usage.contains("--queue-capacity"));
     assertTrue(usage.contains("--max-in-flight"));
+    assertTrue(usage.contains("--diagnostics"));
     assertTrue(usage.contains("127.0.0.1"));
   }
 

@@ -11,6 +11,7 @@ import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.SleepingIdleStrategy;
 
 import dev.sam.exchange.engine.CommandResult;
+import dev.sam.exchange.engine.RejectResult;
 import dev.sam.exchange.protocol.SbeRequestCodec;
 import dev.sam.exchange.transport.AeronRequestClient;
 import dev.sam.exchange.transport.ClientConfig;
@@ -56,6 +57,14 @@ public class EngineGateway implements AutoCloseable {
     this(client, capacity, 1);
   }
 
+  /**
+   * Observes a running worker and available transport without submitting work. Queue capacity
+   * is intentionally excluded; this is neither admission control nor a completion guarantee.
+   */
+  public boolean isReady() {
+    return state == State.RUNNING && worker.isAlive() && client.isTransportAvailable();
+  }
+
   public CompletableFuture<CommandResult> submit(CommandRequest request) {
     if (request == null) {
       throw new IllegalArgumentException("request must not be null");
@@ -67,6 +76,8 @@ public class EngineGateway implements AutoCloseable {
     synchronized (lifecycleLock) {
       if (state != State.RUNNING) {
         rejection = new RejectedExecutionException("Gateway is not running", workerFailure);
+        if (diagnostics != null)
+          diagnostics.notRunning();
       } else if (!requests.offer(pendingRequest)) {
         rejection = new GatewayOverloadedException("request queue is full");
         if (diagnostics != null)
@@ -111,10 +122,14 @@ public class EngineGateway implements AutoCloseable {
         iterator.remove();
         String message = "Gateway worker stopped; request " + active.pending.request().requestId()
             + (active.attempts > 0 ? "; outcome unknown" : "");
+        if (diagnostics != null)
+          diagnostics.failed();
         active.pending.result().completeExceptionally(new IllegalStateException(message, failure));
       }
       PendingRequest pending;
       while ((pending = requests.poll()) != null) {
+        if (diagnostics != null)
+          diagnostics.failed();
         pending.result().completeExceptionally(new IllegalStateException("Gateway worker stopped", failure));
       }
     }
@@ -198,9 +213,13 @@ public class EngineGateway implements AutoCloseable {
   private void handleResponse(CommandResponse response) {
     InFlightRequest active = inFlight.get(response.requestId());
     if (active == null || active.attempts == 0) {
+      if (diagnostics != null)
+        diagnostics.unmatchedResponse();
       return;
     }
     inFlight.remove(response.requestId());
+    if (diagnostics != null)
+      diagnostics.completed(response.result() instanceof RejectResult);
     active.pending.result().complete(response.result());
   }
 
@@ -222,6 +241,8 @@ public class EngineGateway implements AutoCloseable {
           iterator.remove();
           String message = "Offer failed for " + active.pending.request().requestId() + "; result=" + result
               + (active.attempts > 0 ? "; outcome unknown" : "");
+          if (diagnostics != null)
+            diagnostics.failed();
           active.pending.result().completeExceptionally(new IllegalStateException(message));
           workCounter++;
         } else {
@@ -245,6 +266,8 @@ public class EngineGateway implements AutoCloseable {
         iterator.remove();
         String message = "Offer failed for " + active.pending.request().requestId() + "; sending timed out"
             + (active.attempts > 0 ? "; outcome unknown" : "");
+        if (diagnostics != null)
+          diagnostics.failed();
         active.pending.result().completeExceptionally(new IllegalStateException(message));
         workCounter++;
       } else if (active.phase == InFlightRequest.Phase.AWAITING_REPLY && active.attempts < maxAttempts) {
@@ -259,6 +282,8 @@ public class EngineGateway implements AutoCloseable {
         iterator.remove();
         String message = "No reply after " + active.attempts + " attempts for request "
             + active.pending.request().requestId() + (active.attempts > 0 ? "; outcome unknown" : "");
+        if (diagnostics != null)
+          diagnostics.failed();
         active.pending.result().completeExceptionally(new IllegalStateException(message));
         workCounter++;
       }
