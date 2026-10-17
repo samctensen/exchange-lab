@@ -28,6 +28,7 @@ import io.aeron.driver.MediaDriver;
 class AeronRequestClientAvailabilityTest {
   @ParameterizedTest(name = "close publication: {0}")
   @ValueSource(booleans = {true, false})
+  @SuppressWarnings("try") // Closing borrowed resources early is the behavior under test.
   void observesConnectionAndClosedResourcesWithoutSending(boolean closePublication, @TempDir Path directory) {
     try (MediaDriver driver = driver(directory);
         Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()));
@@ -54,6 +55,7 @@ class AeronRequestClientAvailabilityTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Disconnect the peer before closing the client resources.
   void availabilityDoesNotConsumeReplies(@TempDir Path directory) {
     try (MediaDriver driver = driver(directory);
         Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(driver.aeronDirectoryName()));

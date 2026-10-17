@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
@@ -29,6 +28,7 @@ import io.aeron.driver.MediaDriver;
 class WebSocketHealthTest {
   @ParameterizedTest(name = "gateway started: {0}")
   @ValueSource(booleans = {false, true})
+  @SuppressWarnings("try") // Completing the WebSocket handshake proves /orders coexists without sending orders.
   void servesLiveAndActualReadinessWithoutPublishing(boolean started, @TempDir Path directory) throws Exception {
     try (
         MediaDriver driver = MediaDriver.launchEmbedded(new MediaDriver.Context()

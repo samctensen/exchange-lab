@@ -207,6 +207,7 @@ class EngineGatewayDiagnosticsTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Start closing while the resource remains scoped so admission can be observed during drain.
   void admissionDuringDrainIsCountedAsNotRunning() throws Exception {
     var diagnostics = new GatewayDiagnostics();
     var client = new ControlledClient();

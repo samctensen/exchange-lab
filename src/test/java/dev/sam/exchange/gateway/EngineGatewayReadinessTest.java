@@ -29,6 +29,7 @@ import io.aeron.driver.MediaDriver;
 @Timeout(15)
 class EngineGatewayReadinessTest {
   @Test
+  @SuppressWarnings("try") // Exercise disconnect and close while the borrowed transport remains open.
   void requiresStartedWorkerAndConnectedTransport(@TempDir Path directory) {
     try (Transport transport = new Transport(directory);
         EngineGateway gateway = new EngineGateway(new AeronRequestClient(transport.requests, transport.replies), 1)) {
@@ -51,6 +52,7 @@ class EngineGatewayReadinessTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Keeping this peer subscription open establishes the request route.
   void queueSaturationStaysReadyButDrainingDoesNot(@TempDir Path directory) throws Exception {
     CountDownLatch polling = new CountDownLatch(1);
     CountDownLatch release = new CountDownLatch(1);
@@ -92,6 +94,7 @@ class EngineGatewayReadinessTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Keeping this peer subscription open isolates worker failure from disconnect.
   void workerFailureRemovesReadinessEvenWithConnectedTransport(@TempDir Path directory) throws Exception {
     CountDownLatch polling = new CountDownLatch(1);
     CountDownLatch release = new CountDownLatch(1);
