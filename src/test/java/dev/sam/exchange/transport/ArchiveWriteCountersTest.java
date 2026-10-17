@@ -17,6 +17,7 @@ import org.agrona.concurrent.status.CountersManager;
 import org.agrona.concurrent.status.CountersReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class ArchiveWriteCountersTest {
@@ -137,6 +138,62 @@ class ArchiveWriteCountersTest {
     f.values(Long.MAX_VALUE, 3_000, 2_000);
     assertEquals(new ArchiveWriteCounters.Snapshot(Long.MAX_VALUE, 3_000, 2_000),
         reader.awaitSnapshot(Long.MAX_VALUE, f.clock, f.clock));
+  }
+
+  @ParameterizedTest
+  @CsvSource({"32, 100, 80", "64, 90, 80", "64, 100, 70"})
+  void rejectsEachCounterDecreaseDuringTheSnapshotWait(long bytes, long totalNanos, long maxNanos) {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.values(64, 100, 80);
+    f.clock.onIdle = () -> {
+      if (f.clock.now == TimeUnit.MILLISECONDS.toNanos(5))
+        f.values(bytes, totalNanos, maxNanos);
+    };
+    IllegalStateException error = assertThrows(IllegalStateException.class,
+        () -> reader.awaitSnapshot(64, f.clock, f.clock));
+    assertTrue(error.getMessage().contains("decreased"), error.getMessage());
+    assertEquals(TimeUnit.MILLISECONDS.toNanos(5), f.clock.now);
+  }
+
+  @Test
+  void settlesAfterIndependentCounterIncreases() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.values(32, 0, 0);
+    f.clock.onIdle = () -> {
+      if (f.clock.now == TimeUnit.MILLISECONDS.toNanos(5))
+        f.counters.setCounterValue(f.bytes, 64);
+      if (f.clock.now == TimeUnit.MILLISECONDS.toNanos(8))
+        f.counters.setCounterValue(f.max, 20);
+      if (f.clock.now == TimeUnit.MILLISECONDS.toNanos(11))
+        f.counters.setCounterValue(f.time, 30);
+    };
+    assertEquals(new ArchiveWriteCounters.Snapshot(64, 30, 20), reader.awaitSnapshot(64, f.clock, f.clock));
+    assertEquals(TimeUnit.MILLISECONDS.toNanos(31), f.clock.now);
+  }
+
+  @Test
+  void settlesAcrossTheNanoClockWrap() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    long started = Long.MAX_VALUE - TimeUnit.MILLISECONDS.toNanos(10);
+    f.clock.now = started;
+    f.values(64, 30, 20);
+    assertEquals(new ArchiveWriteCounters.Snapshot(64, 30, 20), reader.awaitSnapshot(64, f.clock, f.clock));
+    assertEquals(TimeUnit.MILLISECONDS.toNanos(20), f.clock.now - started);
+  }
+
+  @Test
+  void timesOutAcrossTheNanoClockWrap() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    long started = Long.MAX_VALUE - TimeUnit.SECONDS.toNanos(1);
+    f.clock.now = started;
+    IllegalStateException error = assertThrows(IllegalStateException.class,
+        () -> reader.awaitSnapshot(64, f.clock, f.clock));
+    assertTrue(error.getMessage().contains("Timed out"), error.getMessage());
+    assertEquals(TimeUnit.SECONDS.toNanos(5), f.clock.now - started);
   }
 
   @Test

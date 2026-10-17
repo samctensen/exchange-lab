@@ -71,6 +71,10 @@ final class ArchiveWriteCounters {
       if (now - started >= TIMEOUT_NS)
         throw new IllegalStateException("Timed out waiting for Archive statistics at " + expectedBytes + " bytes");
       Snapshot sample = read();
+      if (previous != null
+          && (sample.bytes() < previous.bytes() || sample.totalWriteNanos() < previous.totalWriteNanos()
+              || sample.maxWriteNanos() < previous.maxWriteNanos()))
+        throw new IllegalStateException("Archive counters decreased while waiting for statistics");
       if (sample.bytes() > expectedBytes)
         throw new IllegalStateException("Unexpected Archive writes; use a fresh dedicated benchmark server");
       if (!sample.equals(previous)) {
