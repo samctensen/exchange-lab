@@ -45,7 +45,7 @@ final class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpReque
       response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0).set(HttpHeaderNames.CONNECTION,
           HttpHeaderValues.CLOSE);
       if (failure.equals(HttpResponseStatus.METHOD_NOT_ALLOWED))
-        response.headers().set(HttpHeaderNames.ALLOW, HttpMethod.GET.name());
+        response.headers().set(HttpHeaderNames.ALLOW, health ? "GET, HEAD" : HttpMethod.GET.name());
       ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
     } else if (health) {
       boolean available = live || ready.getAsBoolean();
