@@ -54,6 +54,15 @@ public class AeronRequestClient {
     return config;
   }
 
+  /**
+   * Observes whether the request route is connected and both borrowed resources are open.
+   * Reply publications may be created lazily, so the reply subscription need not be connected.
+   * This does not send or consume messages and cannot guarantee a later request will complete.
+   */
+  public boolean isTransportAvailable() {
+    return !publication.isClosed() && publication.isConnected() && !replies.isClosed();
+  }
+
   public CommandResult send(CommandRequest request) {
     int messageLength = requestCodec.encode(request, buffer, 0);
     List<CommandResult> matchingResults = new ArrayList<>(1);
