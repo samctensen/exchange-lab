@@ -118,6 +118,9 @@ final class ArchiveWriteCounters {
   String summarize(Snapshot before, Snapshot after, long elapsedNanos) {
     if (elapsedNanos <= 0)
       throw new IllegalArgumentException("Measured duration must be positive");
+    if (before.bytes() < 0 || before.totalWriteNanos() < 0 || before.maxWriteNanos() < 0 || after.bytes() < 0
+        || after.totalWriteNanos() < 0 || after.maxWriteNanos() < 0)
+      throw new IllegalArgumentException("Archive snapshot values must be non-negative");
     if (after.bytes() < before.bytes() || after.totalWriteNanos() < before.totalWriteNanos()
         || after.maxWriteNanos() < before.maxWriteNanos())
       throw new IllegalStateException("Archive counters decreased during measurement");

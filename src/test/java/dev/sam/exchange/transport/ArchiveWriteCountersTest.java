@@ -251,12 +251,72 @@ class ArchiveWriteCountersTest {
     assertThrows(IllegalStateException.class, () -> reader.awaitSnapshot(64, f.clock, f.clock));
   }
 
+  @ParameterizedTest
+  @CsvSource({"-1, 0, 0, 0, 0, 0", "0, -1, 0, 0, 0, 0", "0, 0, -1, 0, 0, 0", "0, 0, 0, -1, 0, 0", "0, 0, 0, 0, -1, 0",
+      "0, 0, 0, 0, 0, -1"})
+  void rejectsNegativeFieldsInEitherSummarySnapshot(long beforeBytes, long beforeTotal, long beforeMax, long afterBytes,
+      long afterTotal, long afterMax) {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    var before = new ArchiveWriteCounters.Snapshot(beforeBytes, beforeTotal, beforeMax);
+    var after = new ArchiveWriteCounters.Snapshot(afterBytes, afterTotal, afterMax);
+    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        () -> reader.summarize(before, after, 1_000));
+    assertTrue(error.getMessage().contains("non-negative"), error.getMessage());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"-1, 0, 0", "0, -1, 0", "0, 0, -1"})
+  void stillReportsInvalidLiveCounterValuesAsIllegalState(long bytes, long totalNanos, long maxNanos) {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.values(bytes, totalNanos, maxNanos);
+    IllegalStateException error = assertThrows(IllegalStateException.class,
+        () -> reader.awaitSnapshot(64, f.clock, f.clock));
+    assertTrue(error.getMessage().contains("invalid"), error.getMessage());
+  }
+
   @Test
-  void rejectsDecreasingTotalsRatherThanPrintingNegativeDeltas() {
+  void summarizesZeroValuedSnapshots() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    var zero = new ArchiveWriteCounters.Snapshot(0, 0, 0);
+    assertEquals("""
+        Archive ID: 7
+        Archive write bytes (measured phase): 0
+        Archive write time (measured phase): 0 ns
+        Archive write time / client elapsed: 0.000%
+        Archive max write time before (lifetime): 0 ns
+        Archive max write time after (lifetime): 0 ns
+        """, reader.summarize(zero, zero, 1));
+  }
+
+  @Test
+  void permitsIndependentlyPublishedSummaryTimeCounters() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    String report = reader.summarize(new ArchiveWriteCounters.Snapshot(0, 0, 20),
+        new ArchiveWriteCounters.Snapshot(64, 30, 40), 100);
+    assertTrue(report.contains("Archive write time (measured phase): 30 ns"), report);
+    assertTrue(report.contains("Archive max write time after (lifetime): 40 ns"), report);
+  }
+
+  @ParameterizedTest
+  @ValueSource(longs = {0, -1, Long.MIN_VALUE})
+  void rejectsNonPositiveSummaryDuration(long elapsedNanos) {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    assertThrows(IllegalArgumentException.class, () -> reader.summarize(new ArchiveWriteCounters.Snapshot(0, 0, 0),
+        new ArchiveWriteCounters.Snapshot(64, 30, 20), elapsedNanos));
+  }
+
+  @ParameterizedTest
+  @CsvSource({"32, 100, 100", "128, 50, 100", "128, 100, 50"})
+  void rejectsDecreasingTotalsRatherThanPrintingNegativeDeltas(long bytes, long totalNanos, long maxNanos) {
     Fixture f = new Fixture();
     ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
     assertThrows(IllegalStateException.class, () -> reader.summarize(new ArchiveWriteCounters.Snapshot(64, 100, 100),
-        new ArchiveWriteCounters.Snapshot(128, 50, 100), 1_000));
+        new ArchiveWriteCounters.Snapshot(bytes, totalNanos, maxNanos), 1_000));
   }
 
   private static final class Fixture {
