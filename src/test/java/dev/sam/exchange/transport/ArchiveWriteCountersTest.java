@@ -50,6 +50,62 @@ class ArchiveWriteCountersTest {
   }
 
   @Test
+  void rejectsAnAlreadyInterruptedSnapshotWaitWithoutClearingTheFlag() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.values(64, 3_000, 2_000);
+    Thread.currentThread().interrupt();
+    try {
+      IllegalStateException error = assertThrows(IllegalStateException.class,
+          () -> reader.awaitSnapshot(64, f.clock, f.clock));
+      assertTrue(error.getMessage().contains("Interrupted"), error.getMessage());
+      assertTrue(Thread.currentThread().isInterrupted());
+      assertEquals(0, f.clock.now);
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  @Test
+  void abortsAnInterruptedWaitBeforeAnotherIdle() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.clock.onIdle = () -> {
+      if (f.clock.now == TimeUnit.MILLISECONDS.toNanos(5))
+        Thread.currentThread().interrupt();
+    };
+    try {
+      IllegalStateException error = assertThrows(IllegalStateException.class,
+          () -> reader.awaitSnapshot(64, f.clock, f.clock));
+      assertTrue(error.getMessage().contains("Interrupted"), error.getMessage());
+      assertTrue(Thread.currentThread().isInterrupted());
+      assertEquals(TimeUnit.MILLISECONDS.toNanos(5), f.clock.now);
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  @Test
+  void rejectsInterruptionAtTheStableSnapshotBoundary() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.values(64, 3_000, 2_000);
+    f.clock.onRead = () -> {
+      if (f.clock.now == TimeUnit.MILLISECONDS.toNanos(20))
+        Thread.currentThread().interrupt();
+    };
+    try {
+      IllegalStateException error = assertThrows(IllegalStateException.class,
+          () -> reader.awaitSnapshot(64, f.clock, f.clock));
+      assertTrue(error.getMessage().contains("Interrupted"), error.getMessage());
+      assertTrue(Thread.currentThread().isInterrupted());
+      assertEquals(TimeUnit.MILLISECONDS.toNanos(20), f.clock.now);
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  @Test
   void refusesToMixCountersFromTwoArchives() {
     Fixture f = new Fixture();
     f.allocate(ARCHIVE_RECORDER_TOTAL_WRITE_BYTES_TYPE_ID, 8);
@@ -136,9 +192,12 @@ class ArchiveWriteCountersTest {
 
   private static final class TestClock implements NanoClock, IdleStrategy {
     long now;
+    Runnable onRead = () -> {
+    };
     Runnable onIdle = () -> {
     };
     public long nanoTime() {
+      onRead.run();
       return now;
     }
     public void idle() {

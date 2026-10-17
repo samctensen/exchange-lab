@@ -64,6 +64,7 @@ final class ArchiveWriteCounters {
     long stableSince = started;
     Snapshot previous = null;
     while (true) {
+      checkInterrupted();
       long now = clock.nanoTime();
       if (now - started >= TIMEOUT_NS)
         throw new IllegalStateException("Timed out waiting for Archive statistics at " + expectedBytes + " bytes");
@@ -76,10 +77,16 @@ final class ArchiveWriteCounters {
       }
       // RecordingPos can advance before the recorder publishes its statistics. These counters are not an atomic
       // tuple: require the expected byte total and a quiet observation period, outside the benchmark timers.
+      checkInterrupted();
       if (sample.bytes() == expectedBytes && now - stableSince >= SETTLE_NS)
         return sample;
       idle.idle();
     }
+  }
+
+  private static void checkInterrupted() {
+    if (Thread.currentThread().isInterrupted())
+      throw new IllegalStateException("Interrupted while waiting for Archive statistics");
   }
 
   private Snapshot read() {
