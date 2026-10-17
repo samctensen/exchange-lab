@@ -81,6 +81,7 @@ values, and invalid values fail before connecting to Aeron or opening a socket.
 | `--aeron-directory=path` | `java.io.tmpdir/exchange-lab-aeron` | Existing engine Media Driver directory; a nonblank path. This is not the Archive directory. |
 | `--timeout-ms=n` | `5000` | Timeout for each send phase and each reply wait. Integer milliseconds, `1..9223372036854`, so conversion to nanoseconds cannot overflow. |
 | `--max-attempts=n` | `3` | Total attempts including the first; `1` disables automatic retries after a missing reply. Positive 32-bit integer. |
+| `--diagnostics` | Off | Print aggregate lifetime counters after shutdown drains accepted work; takes no value. |
 | `--help` | — | Print usage and exit without starting resources; use by itself. |
 
 Print help without starting the engine:
@@ -100,6 +101,12 @@ deadline. Missing replies trigger another attempt up to `--max-attempts`.
 These are gateway client controls. They do not change the engine's recording
 deadlines or its separate `--reply-timeout-ms`, `--reply-capacity`, and
 `--reply-bytes` settings. See [engine reply controls](../README.md#reply-limits-and-diagnostics).
+
+Enable `--diagnostics` to report admission, completion, business rejection,
+terminal failure, and retry counters after shutdown. The report includes work
+that finishes during the drain and retains no request payloads. See
+[gateway diagnostics](gateway-diagnostics.md) for counter definitions and how
+to interpret uncertain outcomes.
 
 ## Stop and reconcile
 

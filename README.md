@@ -124,6 +124,9 @@ Use HTTP `/health/live` and `/health/ready` on the gateway port to check its lis
 and Aeron availability without submitting an order. See [health checks](docs/gateway-health.md)
 for GET/HEAD examples and what readiness can guarantee.
 
+Add `--diagnostics` to print [gateway lifetime counters](docs/gateway-diagnostics.md)
+after shutdown drains accepted work. It is disabled by default.
+
 This endpoint is local-only and has no authentication or TLS. Each gateway has its own
 Aeron response route; use different `--port` values when running multiple gateway instances.
 The engine queues replies separately for each Aeron client connection. A stalled gateway does
