@@ -16,6 +16,8 @@ import org.agrona.concurrent.UnsafeBuffer;
 import org.agrona.concurrent.status.CountersManager;
 import org.agrona.concurrent.status.CountersReader;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class ArchiveWriteCountersTest {
   @Test
@@ -103,6 +105,38 @@ class ArchiveWriteCountersTest {
     } finally {
       Thread.interrupted();
     }
+  }
+
+  @ParameterizedTest
+  @ValueSource(longs = {-1, Long.MIN_VALUE})
+  void rejectsNegativeExpectedBytesBeforeConsultingTheClock(long expectedBytes) {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.clock.onRead = () -> {
+      throw new AssertionError("Clock accessed for invalid expected bytes");
+    };
+    f.clock.onIdle = () -> {
+      throw new AssertionError("Idled for invalid expected bytes");
+    };
+    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        () -> reader.awaitSnapshot(expectedBytes, f.clock, f.clock));
+    assertTrue(error.getMessage().contains("expectedBytes"), error.getMessage());
+  }
+
+  @Test
+  void acceptsAZeroByteSnapshot() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    assertEquals(new ArchiveWriteCounters.Snapshot(0, 0, 0), reader.awaitSnapshot(0, f.clock, f.clock));
+  }
+
+  @Test
+  void acceptsTheLargestPositiveExpectedByteCount() {
+    Fixture f = new Fixture();
+    ArchiveWriteCounters reader = ArchiveWriteCounters.find(f.counters);
+    f.values(Long.MAX_VALUE, 3_000, 2_000);
+    assertEquals(new ArchiveWriteCounters.Snapshot(Long.MAX_VALUE, 3_000, 2_000),
+        reader.awaitSnapshot(Long.MAX_VALUE, f.clock, f.clock));
   }
 
   @Test

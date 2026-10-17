@@ -60,6 +60,8 @@ final class ArchiveWriteCounters {
   }
 
   Snapshot awaitSnapshot(long expectedBytes, NanoClock clock, IdleStrategy idle) {
+    if (expectedBytes < 0)
+      throw new IllegalArgumentException("expectedBytes must be non-negative");
     long started = clock.nanoTime();
     long stableSince = started;
     Snapshot previous = null;
