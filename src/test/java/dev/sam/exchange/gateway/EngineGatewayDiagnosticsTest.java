@@ -2,6 +2,7 @@ package dev.sam.exchange.gateway;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -18,9 +19,14 @@ import java.util.function.Consumer;
 import org.agrona.DirectBuffer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.CancelResult;
+import dev.sam.exchange.engine.CommandResult;
+import dev.sam.exchange.engine.RejectResult;
+import dev.sam.exchange.engine.RejectReason;
 import dev.sam.exchange.protocol.SbeRequestCodec;
 import dev.sam.exchange.transport.AeronRequestClient;
 import dev.sam.exchange.transport.ClientConfig;
@@ -75,6 +81,52 @@ class EngineGatewayDiagnosticsTest {
       assertEquals(1, diagnostics.snapshot().notRunning());
     } finally {
       client.pollRelease.countDown();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void definitiveResultsAreCountedBeforeCompletionCallbacks(boolean rejected) throws Exception {
+    var diagnostics = new GatewayDiagnostics();
+    var client = new ControlledClient();
+    client.pollRelease.countDown();
+    try (var gateway = new EngineGateway(client, 1, 1, diagnostics)) {
+      gateway.start();
+      var future = gateway.submit(request(1));
+      var observed = future.thenApply(result -> diagnostics.snapshot());
+      assertNotNull(client.offered.poll(3, TimeUnit.SECONDS));
+      CommandResult result = rejected
+          ? new RejectResult(1, RejectReason.DUPLICATE_ORDER_ID)
+          : new CancelResult(1, false);
+      client.replies.add(new CommandResponse(request(1).requestId(), result));
+      assertEquals(result, future.get(3, TimeUnit.SECONDS));
+      var snapshot = observed.get(3, TimeUnit.SECONDS);
+      assertEquals(1, snapshot.completed());
+      assertEquals(rejected ? 1 : 0, snapshot.businessRejected());
+      assertTrue(snapshot.summarize().contains("Gateway completed: 1"));
+      assertTrue(snapshot.summarize().contains("Gateway business rejected: " + (rejected ? 1 : 0)));
+    }
+  }
+
+  @Test
+  void callerCancellationDoesNotEraseAnObservedBusinessResult() throws Exception {
+    var diagnostics = new GatewayDiagnostics();
+    var client = new ControlledClient();
+    client.pollRelease.countDown();
+    try (var gateway = new EngineGateway(client, 2, 2, diagnostics)) {
+      gateway.start();
+      var cancelled = gateway.submit(request(1));
+      assertNotNull(client.offered.poll(3, TimeUnit.SECONDS));
+      assertTrue(cancelled.cancel(false));
+      var next = gateway.submit(request(2));
+      assertNotNull(client.offered.poll(3, TimeUnit.SECONDS));
+      client.replies
+          .add(new CommandResponse(request(1).requestId(), new RejectResult(1, RejectReason.REQUEST_ID_CONFLICT)));
+      client.replies.add(new CommandResponse(request(2).requestId(), new CancelResult(2, false)));
+      next.get(3, TimeUnit.SECONDS);
+      assertTrue(cancelled.isCancelled());
+      assertEquals(2, diagnostics.snapshot().completed());
+      assertEquals(1, diagnostics.snapshot().businessRejected());
     }
   }
 

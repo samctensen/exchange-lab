@@ -11,6 +11,7 @@ import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.SleepingIdleStrategy;
 
 import dev.sam.exchange.engine.CommandResult;
+import dev.sam.exchange.engine.RejectResult;
 import dev.sam.exchange.protocol.SbeRequestCodec;
 import dev.sam.exchange.transport.AeronRequestClient;
 import dev.sam.exchange.transport.ClientConfig;
@@ -211,6 +212,8 @@ public class EngineGateway implements AutoCloseable {
       return;
     }
     inFlight.remove(response.requestId());
+    if (diagnostics != null)
+      diagnostics.completed(response.result() instanceof RejectResult);
     active.pending.result().complete(response.result());
   }
 
