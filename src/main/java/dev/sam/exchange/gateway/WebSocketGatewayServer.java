@@ -31,6 +31,7 @@ public final class WebSocketGatewayServer {
             --max-message-bytes=n  Maximum inbound message/HTTP body bytes (default: 16384)
             --max-response-bytes=n  Maximum JSON response bytes (default: 1048576)
             --read-idle-timeout-ms=n  Close connections without reads (default: 60000)
+            --handshake-timeout-ms=n  WebSocket upgrade completion timeout (default: 5000)
             --aeron-directory=p  Existing engine Media Driver directory
                                  (default: java.io.tmpdir/exchange-lab-aeron)
             --timeout-ms=n       Timeout for each send and reply wait in milliseconds (default: 5000)
@@ -130,6 +131,7 @@ public final class WebSocketGatewayServer {
       int maxMessageBytes = defaults.maxMessageBytes();
       int maxResponseBytes = defaults.maxResponseBytes();
       long readIdleTimeoutMillis = defaults.readIdleTimeoutMillis();
+      long handshakeTimeoutMillis = defaults.handshakeTimeoutMillis();
       var seen = new HashSet<String>();
       for (String arg : args) {
         String[] parts = arg.split("=", 2);
@@ -144,6 +146,7 @@ public final class WebSocketGatewayServer {
           case "--max-message-bytes" -> maxMessageBytes = positiveIntegerValue(parts);
           case "--max-response-bytes" -> maxResponseBytes = positiveIntegerValue(parts);
           case "--read-idle-timeout-ms" -> readIdleTimeoutMillis = millisecondValue(parts);
+          case "--handshake-timeout-ms" -> handshakeTimeoutMillis = millisecondValue(parts);
           case "--aeron-directory" -> aeronDirectory = argumentValue(parts);
           case "--timeout-ms" -> timeout = Duration.ofMillis(millisecondValue(parts));
           case "--diagnostics" -> {
@@ -161,7 +164,7 @@ public final class WebSocketGatewayServer {
       }
       return new Config(port, queueCapacity, maxInFlight, aeronDirectory, new ClientConfig(timeout, maxAttempts),
           diagnostics, new WebSocketLimits(maxConnections, maxPendingPerConnection, maxMessageBytes, maxResponseBytes,
-              readIdleTimeoutMillis, defaults.handshakeTimeoutMillis()));
+              readIdleTimeoutMillis, handshakeTimeoutMillis));
     }
 
     private static long millisecondValue(String[] parts) {

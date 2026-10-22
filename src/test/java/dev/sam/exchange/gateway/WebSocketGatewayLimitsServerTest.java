@@ -49,12 +49,16 @@ class WebSocketGatewayLimitsServerTest {
     }
   }
 
-  @Test
-  void connectionFlagRequiresAValueAndCannotBeRepeated() {
-    assertThrows(IllegalArgumentException.class,
-        () -> WebSocketGatewayServer.Config.parse(new String[]{"--max-connections"}));
-    assertThrows(IllegalArgumentException.class,
-        () -> WebSocketGatewayServer.Config.parse(new String[]{"--max-connections=1", "--max-connections=2"}));
+  @ParameterizedTest
+  @ValueSource(strings = {"--max-connections", "--max-pending-per-connection", "--max-message-bytes",
+      "--max-response-bytes", "--read-idle-timeout-ms", "--handshake-timeout-ms"})
+  void limitFlagsRequireValuesAndCannotBeRepeated(String flag) {
+    var missing = assertThrows(IllegalArgumentException.class,
+        () -> WebSocketGatewayServer.Config.parse(new String[]{flag}));
+    assertEquals("Expected " + flag + "=value", missing.getMessage());
+    var duplicate = assertThrows(IllegalArgumentException.class,
+        () -> WebSocketGatewayServer.Config.parse(new String[]{flag + "=1", flag + "=2"}));
+    assertEquals("Duplicate gateway argument: " + flag, duplicate.getMessage());
   }
 
   @Test
@@ -99,7 +103,7 @@ class WebSocketGatewayLimitsServerTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"--read-idle-timeout-ms"})
+  @ValueSource(strings = {"--read-idle-timeout-ms", "--handshake-timeout-ms"})
   void timeoutLimitsRejectInvalidOrOverflowingMillisecondsBeforeConnecting(String flag) {
     for (String value : List.of("0", "-1", "9223372036855", "9223372036854775808", "bad", "")) {
       var failure = assertThrows(IllegalArgumentException.class,
@@ -107,6 +111,19 @@ class WebSocketGatewayLimitsServerTest {
       assertTrue(failure.getMessage().contains(flag));
       assertFalse(failure.getMessage().startsWith("Unknown"));
     }
+  }
+
+  @Test
+  void eachLimitHasItsOwnConfigurationAndPreservesRequestTimeouts() {
+    var config = WebSocketGatewayServer.Config.parse(new String[]{"--max-connections=2",
+        "--max-pending-per-connection=3", "--max-message-bytes=4", "--max-response-bytes=5", "--read-idle-timeout-ms=1",
+        "--handshake-timeout-ms=9223372036854", "--timeout-ms=7"});
+    assertEquals(new WebSocketLimits(2, 3, 4, 5, 1, 9223372036854L), config.webSocketLimits());
+    assertEquals(Duration.ofMillis(7), config.clientConfig().timeout());
+    var inverse = WebSocketGatewayServer.Config
+        .parse(new String[]{"--handshake-timeout-ms=1", "--read-idle-timeout-ms=9223372036854"});
+    assertEquals(1, inverse.webSocketLimits().handshakeTimeoutMillis());
+    assertEquals(9223372036854L, inverse.webSocketLimits().readIdleTimeoutMillis());
   }
 
   private final class Fixture implements AutoCloseable {
