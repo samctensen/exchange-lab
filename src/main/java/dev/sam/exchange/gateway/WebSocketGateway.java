@@ -75,7 +75,7 @@ public final class WebSocketGateway implements AutoCloseable {
               clients.add(channel);
               channel.closeFuture().addListener(ignored -> connectionCount.decrementAndGet());
               var pipeline = channel.pipeline();
-              pipeline.addLast(new IdleStateHandler(60, 0, 0));
+              pipeline.addLast(new IdleStateHandler(limits.readIdleTimeoutMillis(), 0, 0, TimeUnit.MILLISECONDS));
               pipeline.addLast(new HttpServerCodec());
               pipeline.addLast(new HttpObjectAggregator(limits.maxMessageBytes()));
               pipeline.addLast(new GatewayHttpHandler(gateway::isReady));

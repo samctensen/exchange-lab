@@ -145,6 +145,30 @@ class WebSocketResourceLimitsTest {
     }
   }
 
+  @Test
+  void configuredReadIdleTimeoutClosesUnupgradedSocketsAndReturnsTheirSlot() throws Exception {
+    var limits = new WebSocketLimits(1, 2, 128, 1048576, 200, 5000);
+    try (Fixture f = new Fixture(limits)) {
+      try (var idle = new Socket("127.0.0.1", f.server.port())) {
+        idle.setSoTimeout(3000);
+        assertEquals(-1, idle.getInputStream().read(), "Idle TCP connection must expire without an upgrade");
+      }
+      try (var replacement = connectWhenSlotReleased(f.server.port())) {
+        assertTrue(replacement.request(WebSocketOrderHandlerTest.cancel(1)).has("cancel"));
+      }
+    }
+  }
+
+  @Test
+  void configuredReadIdleTimeoutClosesAnUpgradedSocket() throws Exception {
+    var limits = new WebSocketLimits(1, 2, 128, 1048576, 500, 5000);
+    try (Fixture f = new Fixture(limits); var client = new WebSocketTestClient(f.server.port())) {
+      assertTrue(client.request(WebSocketOrderHandlerTest.cancel(1)).has("cancel"));
+      // A read-idle close is a transport close; the client may report EOF instead of a close frame.
+      assertTrue(client.closed.handle((status, failure) -> true).get(3, TimeUnit.SECONDS));
+    }
+  }
+
   private static void sendText(WebSocketTestClient client, String message, boolean fragmented) throws Exception {
     if (fragmented) {
       client.socket.sendText(message.substring(0, 64), false).get(3, TimeUnit.SECONDS);
