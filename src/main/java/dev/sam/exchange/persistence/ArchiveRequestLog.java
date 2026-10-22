@@ -29,6 +29,7 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
   private static final String ALIAS = "exchange-request-log";
   private static final int LOG_STREAM_ID = 2001;
   private static final int REPLAY_STREAM_ID = 2002;
+  private static final int CATALOGUE_BATCH_SIZE = 16;
   private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
 
   private record Recording(long id, long start, long stop, int initialTermId, int termLength, int mtu) {
@@ -143,11 +144,20 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
 
   private static Recording findRecording(AeronArchive archive) {
     List<Recording> found = new ArrayList<>();
-    archive.listRecordingsForUri(0, 2, "alias=" + ALIAS, LOG_STREAM_ID,
-        (controlSessionId, correlationId, recordingId, startTimestamp, stopTimestamp, startPosition, stopPosition,
-            initialTermId, segmentFileLength, termBufferLength, mtuLength, sessionId, streamId, strippedChannel,
-            originalChannel, sourceIdentity) -> found.add(
-                new Recording(recordingId, startPosition, stopPosition, initialTermId, termBufferLength, mtuLength)));
+    long[] nextRecordingId = {0};
+    int count;
+    do {
+      count = archive.listRecordingsForUri(nextRecordingId[0], CATALOGUE_BATCH_SIZE, "alias=" + ALIAS, LOG_STREAM_ID,
+          (controlSessionId, correlationId, recordingId, startTimestamp, stopTimestamp, startPosition, stopPosition,
+              initialTermId, segmentFileLength, termBufferLength, mtuLength, sessionId, streamId, strippedChannel,
+              originalChannel, sourceIdentity) -> {
+            nextRecordingId[0] = recordingId + 1;
+            if (ALIAS.equals(ChannelUri.parse(originalChannel).get("alias"))) {
+              found.add(
+                  new Recording(recordingId, startPosition, stopPosition, initialTermId, termBufferLength, mtuLength));
+            }
+          });
+    } while (count == CATALOGUE_BATCH_SIZE && found.size() < 2);
     if (found.size() > 1)
       throw new IllegalStateException("Multiple request recordings; cannot determine one ordered log");
     if (found.isEmpty())
