@@ -35,6 +35,7 @@ public final class WebSocketGateway implements AutoCloseable {
   private static final int MAX_CONNECTIONS = 128;
   private final EngineGateway gateway;
   private final int requestedPort;
+  private final WebSocketLimits limits;
   private final EventLoopGroup acceptor;
   private final EventLoopGroup workers;
   private final ChannelGroup clients = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
@@ -44,7 +45,12 @@ public final class WebSocketGateway implements AutoCloseable {
   private boolean closed;
 
   public WebSocketGateway(EngineGateway gateway, int port) {
+    this(gateway, port, WebSocketLimits.defaults());
+  }
+
+  public WebSocketGateway(EngineGateway gateway, int port, WebSocketLimits limits) {
     this.gateway = Objects.requireNonNull(gateway);
+    this.limits = Objects.requireNonNull(limits, "limits");
     if (port < 0 || port > 65535)
       throw new IllegalArgumentException("Port must be 0..65535");
     requestedPort = port;
