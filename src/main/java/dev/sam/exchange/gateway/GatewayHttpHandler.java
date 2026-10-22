@@ -4,6 +4,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFutureListener;
@@ -20,9 +21,15 @@ import io.netty.handler.codec.http.HttpVersion;
 /** Serves local probes and applies the same browser Origin policy to probes and order upgrades. */
 final class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
   private final BooleanSupplier ready;
+  private final Supplier<String> metrics;
 
   GatewayHttpHandler(BooleanSupplier ready) {
+    this(ready, null);
+  }
+
+  GatewayHttpHandler(BooleanSupplier ready, Supplier<String> metrics) {
     this.ready = Objects.requireNonNull(ready);
+    this.metrics = metrics;
   }
 
   @Override
@@ -30,10 +37,11 @@ final class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpReque
     boolean live = request.uri().equals("/health/live");
     boolean readiness = request.uri().equals("/health/ready");
     boolean health = live || readiness;
+    boolean scrape = metrics != null && request.uri().equals("/metrics");
     HttpResponseStatus failure = null;
     if (!request.decoderResult().isSuccess())
       failure = HttpResponseStatus.BAD_REQUEST;
-    else if (!health && !request.uri().equals("/orders"))
+    else if (!health && !scrape && !request.uri().equals("/orders"))
       failure = HttpResponseStatus.NOT_FOUND;
     else if (!request.method().equals(HttpMethod.GET) && !(health && request.method().equals(HttpMethod.HEAD)))
       failure = HttpResponseStatus.METHOD_NOT_ALLOWED;
@@ -50,6 +58,14 @@ final class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpReque
         response.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-store");
       if (failure.equals(HttpResponseStatus.METHOD_NOT_ALLOWED))
         response.headers().set(HttpHeaderNames.ALLOW, health ? "GET, HEAD" : HttpMethod.GET.name());
+      ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+    } else if (scrape) {
+      byte[] body = metrics.get().getBytes(StandardCharsets.UTF_8);
+      var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
+          Unpooled.wrappedBuffer(body));
+      response.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-store")
+          .set(HttpHeaderNames.CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")
+          .setInt(HttpHeaderNames.CONTENT_LENGTH, body.length).set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
       ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
     } else if (health) {
       boolean available = live || ready.getAsBoolean();
