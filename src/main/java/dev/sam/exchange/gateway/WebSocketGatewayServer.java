@@ -26,6 +26,7 @@ public final class WebSocketGatewayServer {
             --port=n             Listen port, 0..65535; 0 selects an available port (default: 8080)
             --queue-capacity=n   Maximum queued requests, positive integer (default: 128)
             --max-in-flight=n    Maximum active requests, positive integer (default: 8)
+            --max-connections=n  Maximum accepted TCP connections (default: 128)
             --aeron-directory=p  Existing engine Media Driver directory
                                  (default: java.io.tmpdir/exchange-lab-aeron)
             --timeout-ms=n       Timeout for each send and reply wait in milliseconds (default: 5000)
@@ -43,7 +44,7 @@ public final class WebSocketGatewayServer {
         Publication requests = aeron.addPublication("aeron:ipc?response-correlation-id=" + replies.registrationId(), 1);
         EngineGateway gateway = new EngineGateway(new AeronRequestClient(requests, replies, config.clientConfig()),
             config.queueCapacity(), config.maxInFlight(), diagnostics);
-        WebSocketGateway server = new WebSocketGateway(gateway, config.port())) {
+        WebSocketGateway server = new WebSocketGateway(gateway, config.port(), config.webSocketLimits())) {
       gateway.start();
       server.start();
       Thread mainThread = Thread.currentThread();
@@ -77,7 +78,12 @@ public final class WebSocketGatewayServer {
   }
 
   record Config(int port, int queueCapacity, int maxInFlight, String aeronDirectory, ClientConfig clientConfig,
-      boolean diagnostics) {
+      boolean diagnostics, WebSocketLimits webSocketLimits) {
+    Config(int port, int queueCapacity, int maxInFlight, String aeronDirectory, ClientConfig clientConfig,
+        boolean diagnostics) {
+      this(port, queueCapacity, maxInFlight, aeronDirectory, clientConfig, diagnostics, WebSocketLimits.defaults());
+    }
+
     Config(int port, int queueCapacity, int maxInFlight, String aeronDirectory, ClientConfig clientConfig) {
       this(port, queueCapacity, maxInFlight, aeronDirectory, clientConfig, false);
     }
@@ -102,6 +108,8 @@ public final class WebSocketGatewayServer {
       }
       if (clientConfig == null)
         throw new IllegalArgumentException("clientConfig must not be null");
+      if (webSocketLimits == null)
+        throw new IllegalArgumentException("webSocketLimits must not be null");
     }
 
     static Config parse(String[] args) {
@@ -112,6 +120,8 @@ public final class WebSocketGatewayServer {
       Duration timeout = ClientConfig.defaults().timeout();
       int maxAttempts = ClientConfig.defaults().maxAttempts();
       boolean diagnostics = false;
+      WebSocketLimits defaults = WebSocketLimits.defaults();
+      int maxConnections = defaults.maxConnections();
       var seen = new HashSet<String>();
       for (String arg : args) {
         String[] parts = arg.split("=", 2);
@@ -121,6 +131,7 @@ public final class WebSocketGatewayServer {
           case "--port" -> port = integerValue(parts);
           case "--queue-capacity" -> queueCapacity = integerValue(parts);
           case "--max-in-flight" -> maxInFlight = integerValue(parts);
+          case "--max-connections" -> maxConnections = positiveIntegerValue(parts);
           case "--aeron-directory" -> aeronDirectory = argumentValue(parts);
           case "--timeout-ms" -> timeout = timeoutValue(parts);
           case "--diagnostics" -> {
@@ -137,7 +148,9 @@ public final class WebSocketGatewayServer {
         }
       }
       return new Config(port, queueCapacity, maxInFlight, aeronDirectory, new ClientConfig(timeout, maxAttempts),
-          diagnostics);
+          diagnostics,
+          new WebSocketLimits(maxConnections, defaults.maxPendingPerConnection(), defaults.maxMessageBytes(),
+              defaults.maxResponseBytes(), defaults.readIdleTimeoutMillis(), defaults.handshakeTimeoutMillis()));
     }
 
     private static Duration timeoutValue(String[] parts) {
@@ -160,6 +173,13 @@ public final class WebSocketGatewayServer {
       } catch (NumberFormatException error) {
         throw new IllegalArgumentException(parts[0] + " must be a 32-bit integer: " + value, error);
       }
+    }
+
+    private static int positiveIntegerValue(String[] parts) {
+      int value = integerValue(parts);
+      if (value < 1)
+        throw new IllegalArgumentException(parts[0] + " must be positive");
+      return value;
     }
 
     private static String argumentValue(String[] parts) {
