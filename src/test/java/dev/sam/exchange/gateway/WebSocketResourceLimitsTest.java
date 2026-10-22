@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import dev.sam.exchange.engine.CancelResult;
 
@@ -125,6 +126,22 @@ class WebSocketResourceLimitsTest {
       var overLimit = HttpRequest.newBuilder(uri).method("GET", HttpRequest.BodyPublishers.ofString("x".repeat(129)))
           .build();
       assertEquals(413, http.send(overLimit, HttpResponse.BodyHandlers.discarding()).statusCode());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"94, false", "95, true"})
+  void appliesTheConfiguredResponseByteBoundary(int maxResponseBytes, boolean fits) throws Exception {
+    var limits = new WebSocketLimits(4, 2, 128, maxResponseBytes, 60000, 5000);
+    try (Fixture f = new Fixture(limits); var client = new WebSocketTestClient(f.server.port())) {
+      client.socket.sendText(WebSocketOrderHandlerTest.cancel(1), true).get(3, TimeUnit.SECONDS);
+      // This cancel result has a 36-byte UUID and a one-digit order ID: 95 JSON bytes in total.
+      if (fits) {
+        assertEquals("1", client.response().getAsJsonObject("cancel").get("orderId").getAsString());
+      } else {
+        assertEquals(1009, client.closed.get(3, TimeUnit.SECONDS));
+        assertTrue(client.closeReason.get(3, TimeUnit.SECONDS).contains("outcome unknown"));
+      }
     }
   }
 

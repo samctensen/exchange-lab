@@ -3,6 +3,7 @@ package dev.sam.exchange.gateway;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -17,8 +18,11 @@ import com.google.gson.JsonParser;
 
 import dev.sam.exchange.engine.CancelResult;
 import dev.sam.exchange.engine.CommandResult;
+import dev.sam.exchange.engine.PlaceResult;
+import dev.sam.exchange.engine.Trade;
 import dev.sam.exchange.transport.CommandRequest;
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.channel.WriteBufferWaterMark;
 import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
@@ -254,6 +258,46 @@ class WebSocketOrderHandlerTest {
     try {
       channel.unsafe().outboundBuffer().setUserDefinedWritability(1, false);
       channel.runPendingTasks();
+      assertFalse(channel.isActive());
+    } finally {
+      channel.finishAndReleaseAll();
+    }
+  }
+
+  @Test
+  void configuredResponseBudgetCanExceedTheLegacyDefault() {
+    var result = new PlaceResult(1, Collections.nCopies(16384, new Trade(1, 2, 3, 4)), 0);
+    var limits = new WebSocketLimits(1, 1, 16384, 2097152, 60000, 5000);
+    EmbeddedChannel channel = new EmbeddedChannel(
+        new WebSocketOrderHandler(request -> CompletableFuture.completedFuture(result), limits));
+    // Keep this response-budget check independent of the separate slow-reader watermark.
+    channel.config().setWriteBufferWaterMark(new WriteBufferWaterMark(2097152, 3145728));
+    try {
+      channel.writeInbound(new TextWebSocketFrame(cancel(1)));
+      channel.runPendingTasks();
+      var reply = response(channel);
+      assertEquals(16384, reply.getAsJsonObject("place").getAsJsonArray("trades").size());
+      assertTrue(channel.isActive());
+    } finally {
+      channel.finishAndReleaseAll();
+    }
+  }
+
+  @Test
+  void legacyHandlerRetainsTheDefaultResponseBudget() {
+    var result = new PlaceResult(1, Collections.nCopies(16384, new Trade(1, 2, 3, 4)), 0);
+    EmbeddedChannel channel = new EmbeddedChannel(
+        new WebSocketOrderHandler(request -> CompletableFuture.completedFuture(result), 1));
+    try {
+      channel.writeInbound(new TextWebSocketFrame(cancel(1)));
+      channel.runPendingTasks();
+      CloseWebSocketFrame close = assertInstanceOf(CloseWebSocketFrame.class, channel.readOutbound());
+      try {
+        assertEquals(1009, close.statusCode());
+        assertTrue(close.reasonText().contains("outcome unknown"));
+      } finally {
+        close.release();
+      }
       assertFalse(channel.isActive());
     } finally {
       channel.finishAndReleaseAll();

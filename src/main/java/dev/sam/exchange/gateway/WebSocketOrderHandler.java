@@ -20,7 +20,6 @@ import io.netty.handler.timeout.IdleStateEvent;
 
 /** One instance per socket. All mutable state belongs to that socket's event loop. */
 final class WebSocketOrderHandler extends SimpleChannelInboundHandler<WebSocketFrame> {
-  private static final int MAX_RESPONSE_BYTES = 1024 * 1024;
   private final Function<CommandRequest, CompletableFuture<CommandResult>> submit;
   private final int maxPending;
   private final WebSocketLimits limits;
@@ -115,7 +114,7 @@ final class WebSocketOrderHandler extends SimpleChannelInboundHandler<WebSocketF
     if (!ctx.channel().isActive() || !ctx.channel().isWritable())
       return ctx.close();
     TextWebSocketFrame frame = new TextWebSocketFrame(response);
-    if (frame.content().readableBytes() > MAX_RESPONSE_BYTES) {
+    if (frame.content().readableBytes() > limits.maxResponseBytes()) {
       frame.release();
       return ctx.writeAndFlush(new CloseWebSocketFrame(1009, "Response too large; outcome unknown"))
           .addListener(ChannelFutureListener.CLOSE);
