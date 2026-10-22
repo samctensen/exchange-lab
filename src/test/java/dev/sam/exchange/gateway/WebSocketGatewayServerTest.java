@@ -6,6 +6,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.net.http.WebSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -64,9 +66,9 @@ class WebSocketGatewayServerTest {
   }
 
   @ParameterizedTest
-  @ValueSource(booleans = {false, true})
+  @CsvSource({"false,false", "false,true", "true,false", "true,true"})
   @Timeout(40)
-  void launcherDiagnosticsReportRecordedResultsOnlyWhenEnabled(boolean enabled) throws Exception {
+  void launcherMetricsAndShutdownDiagnosticsAreIndependent(boolean enabled, boolean metrics) throws Exception {
     Path output = temporaryDirectory.resolve("gateway-diagnostics.log");
     Path archiveDirectory = temporaryDirectory.resolve("archive");
     String driverDirectory = temporaryDirectory.resolve("recorded-driver").toString();
@@ -80,13 +82,42 @@ class WebSocketGatewayServerTest {
         AgentRunner runner = new AgentRunner(new SleepingIdleStrategy(), error -> failure.compareAndSet(null, error),
             null, new AeronEngineAgent(requests, publications, state, log, false))) {
       AgentRunner.startOnThread(runner);
-      Process gateway = startGateway(output, driverDirectory, enabled ? new String[]{"--diagnostics"} : new String[0]);
+      var flags = new ArrayList<String>();
+      if (enabled)
+        flags.add("--diagnostics");
+      if (metrics)
+        flags.add("--metrics");
+      Process gateway = startGateway(output, driverDirectory, flags.toArray(String[]::new));
       try {
-        try (var client = new WebSocketTestClient(awaitEndpoint(gateway, output).getPort())) {
+        int port = awaitEndpoint(gateway, output).getPort();
+        try (HttpClient http = HttpClient.newHttpClient(); var client = new WebSocketTestClient(port)) {
+          var before = scrape(http, port, "GET");
+          assertEquals(metrics ? 200 : 404, before.statusCode());
+          if (metrics)
+            assertMetric(before.body(), "accepted_total", 0);
           var placed = client.request(WebSocketGatewayTest.place(1, 101, "BID", 100, 5));
           assertEquals("5", placed.getAsJsonObject("place").get("remainingLots").getAsString());
           var rejected = client.request(WebSocketGatewayTest.place(2, 101, "BID", 100, 1));
           assertEquals("DUPLICATE_ORDER_ID", rejected.getAsJsonObject("reject").get("reason").getAsString());
+          for (int i = 0; i < 3; i++) {
+            var after = scrape(http, port, "GET");
+            assertEquals(metrics ? 200 : 404, after.statusCode());
+            if (metrics) {
+              assertMetric(after.body(), "accepted_total", 2);
+              assertMetric(after.body(), "completed_total", 2);
+              assertMetric(after.body(), "business_rejected_total", 1);
+              assertMetric(after.body(), "failed_total", 0);
+              assertMetric(after.body(), "ready", 1);
+              assertTrue(after.headers().firstValue("Content-Type").orElseThrow().contains("version=0.0.4"));
+              assertEquals("no-store", after.headers().firstValue("Cache-Control").orElseThrow());
+              assertFalse(after.body().contains(new UUID(0, 1).toString()));
+              assertFalse(after.body().contains("DUPLICATE_ORDER_ID"));
+              var head = scrape(http, port, "HEAD");
+              assertEquals(200, head.statusCode());
+              assertEquals("", head.body());
+              assertEquals(after.headers().firstValue("Content-Length"), head.headers().firstValue("Content-Length"));
+            }
+          }
         }
         assertFalse(Files.readString(output).contains("Gateway diagnostics:"), "Summary must wait for shutdown");
       } finally {
@@ -111,6 +142,55 @@ class WebSocketGatewayServerTest {
       ArchiveRequestLog.replay(runtime.archive(), recorded::add);
       assertEquals(List.of(101L, 101L), recorded.stream().map(request -> request.command().orderId()).toList());
     }
+  }
+
+  @Test
+  @Timeout(30)
+  void metricsRemainAvailableWithoutAnEngineSubscription() throws Exception {
+    Path output = temporaryDirectory.resolve("metrics-unavailable.log");
+    try (
+        MediaDriver driver = MediaDriver.launchEmbedded(new MediaDriver.Context()
+            .aeronDirectoryName(temporaryDirectory.resolve("metrics-driver").toString()).dirDeleteOnShutdown(true));
+        HttpClient http = HttpClient.newHttpClient()) {
+      Process gateway = startGateway(output, driver.aeronDirectoryName(), "--metrics");
+      try {
+        int port = awaitEndpoint(gateway, output).getPort();
+        var response = scrape(http, port, "GET");
+        assertEquals(200, response.statusCode());
+        assertMetric(response.body(), "ready", 0);
+        assertMetric(response.body(), "accepted_total", 0);
+        assertMetric(response.body(), "offers_total", 0);
+      } finally {
+        stopGateway(gateway);
+      }
+      assertFalse(Files.readString(output).contains("Gateway diagnostics:"));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"--metrics=true", "--metrics=false", "--metrics="})
+  void metricsValueFormsFailBeforeConnecting(String flag) {
+    var error = assertThrows(IllegalArgumentException.class, () -> WebSocketGatewayServer.main(new String[]{flag}));
+    assertTrue(error.getMessage().contains("--metrics does not take a value"));
+  }
+
+  @Test
+  void metricsFlagCannotBeRepeated() {
+    var error = assertThrows(IllegalArgumentException.class,
+        () -> WebSocketGatewayServer.main(new String[]{"--metrics", "--metrics"}));
+    assertTrue(error.getMessage().contains("Duplicate gateway argument: --metrics"));
+  }
+
+  private static HttpResponse<String> scrape(HttpClient http, int port, String method) throws Exception {
+    return http.send(
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/metrics")).timeout(Duration.ofSeconds(3))
+            .method(method, HttpRequest.BodyPublishers.noBody()).build(),
+        HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+  }
+
+  private static void assertMetric(String text, String name, long value) {
+    assertEquals(List.of("exchange_gateway_" + name + " " + value),
+        text.lines().filter(line -> line.startsWith("exchange_gateway_" + name + " ")).toList(), text);
   }
 
   @Test

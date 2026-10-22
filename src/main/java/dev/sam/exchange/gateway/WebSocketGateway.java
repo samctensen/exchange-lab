@@ -5,6 +5,7 @@ import java.net.InetSocketAddress;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
@@ -35,6 +36,7 @@ public final class WebSocketGateway implements AutoCloseable {
   private final EngineGateway gateway;
   private final int requestedPort;
   private final WebSocketLimits limits;
+  private final Supplier<String> metrics;
   private final EventLoopGroup acceptor;
   private final EventLoopGroup workers;
   private final ChannelGroup clients = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
@@ -48,8 +50,13 @@ public final class WebSocketGateway implements AutoCloseable {
   }
 
   public WebSocketGateway(EngineGateway gateway, int port, WebSocketLimits limits) {
+    this(gateway, port, limits, null);
+  }
+
+  WebSocketGateway(EngineGateway gateway, int port, WebSocketLimits limits, Supplier<String> metrics) {
     this.gateway = Objects.requireNonNull(gateway);
     this.limits = Objects.requireNonNull(limits, "limits");
+    this.metrics = metrics;
     if (port < 0 || port > 65535)
       throw new IllegalArgumentException("Port must be 0..65535");
     requestedPort = port;
@@ -92,7 +99,7 @@ public final class WebSocketGateway implements AutoCloseable {
     pipeline.addLast(new IdleStateHandler(limits.readIdleTimeoutMillis(), 0, 0, TimeUnit.MILLISECONDS));
     pipeline.addLast(new HttpServerCodec());
     pipeline.addLast(new HttpObjectAggregator(limits.maxMessageBytes()));
-    pipeline.addLast(new GatewayHttpHandler(gateway::isReady));
+    pipeline.addLast(new GatewayHttpHandler(gateway::isReady, metrics));
     pipeline.addLast(new WebSocketServerProtocolHandler(WebSocketServerProtocolConfig.newBuilder()
         .websocketPath("/orders").maxFramePayloadLength(limits.maxMessageBytes()).allowExtensions(false)
         .handshakeTimeoutMillis(limits.handshakeTimeoutMillis()).build()));
