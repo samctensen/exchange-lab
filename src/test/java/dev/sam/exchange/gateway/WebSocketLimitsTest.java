@@ -41,7 +41,8 @@ class WebSocketLimitsTest {
       assertThrows(NullPointerException.class, () -> new WebSocketGateway(null, 0, WebSocketLimits.defaults()));
       assertThrows(NullPointerException.class, () -> new WebSocketGateway(gateway, 0, null));
       assertThrows(IllegalArgumentException.class, () -> new WebSocketGateway(gateway, -1, WebSocketLimits.defaults()));
-      assertThrows(IllegalArgumentException.class, () -> new WebSocketGateway(gateway, 65536, WebSocketLimits.defaults()));
+      assertThrows(IllegalArgumentException.class,
+          () -> new WebSocketGateway(gateway, 65536, WebSocketLimits.defaults()));
     }
   }
 }

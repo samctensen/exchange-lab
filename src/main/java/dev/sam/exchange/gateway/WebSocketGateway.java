@@ -32,7 +32,6 @@ import io.netty.util.concurrent.GlobalEventExecutor;
 /** Loopback learning endpoint. The caller owns and starts the supplied EngineGateway. */
 public final class WebSocketGateway implements AutoCloseable {
   private static final int MAX_MESSAGE_BYTES = 16 * 1024;
-  private static final int MAX_CONNECTIONS = 128;
   private final EngineGateway gateway;
   private final int requestedPort;
   private final WebSocketLimits limits;
@@ -69,7 +68,7 @@ public final class WebSocketGateway implements AutoCloseable {
           .childHandler(new ChannelInitializer<SocketChannel>() {
             @Override
             protected void initChannel(SocketChannel channel) {
-              if (connectionCount.incrementAndGet() > MAX_CONNECTIONS) {
+              if (connectionCount.incrementAndGet() > limits.maxConnections()) {
                 connectionCount.decrementAndGet();
                 channel.close();
                 return;
