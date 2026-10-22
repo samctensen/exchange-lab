@@ -37,6 +37,12 @@ class WebSocketOrderHandlerTest {
   }
 
   @Test
+  void rejectsMissingConfiguredLimits() {
+    assertThrows(NullPointerException.class,
+        () -> new WebSocketOrderHandler(request -> new CompletableFuture<>(), (WebSocketLimits) null));
+  }
+
+  @Test
   void completionsAreCorrelatedAndRoutedOnlyToTheirOwnSocket() {
     List<CompletableFuture<CommandResult>> results = new ArrayList<>();
     List<CommandRequest> requests = new ArrayList<>();

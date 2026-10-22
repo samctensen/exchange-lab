@@ -31,7 +31,6 @@ import io.netty.util.concurrent.GlobalEventExecutor;
 
 /** Loopback learning endpoint. The caller owns and starts the supplied EngineGateway. */
 public final class WebSocketGateway implements AutoCloseable {
-  private static final int MAX_MESSAGE_BYTES = 16 * 1024;
   private final EngineGateway gateway;
   private final int requestedPort;
   private final WebSocketLimits limits;
@@ -78,13 +77,13 @@ public final class WebSocketGateway implements AutoCloseable {
               var pipeline = channel.pipeline();
               pipeline.addLast(new IdleStateHandler(60, 0, 0));
               pipeline.addLast(new HttpServerCodec());
-              pipeline.addLast(new HttpObjectAggregator(MAX_MESSAGE_BYTES));
+              pipeline.addLast(new HttpObjectAggregator(limits.maxMessageBytes()));
               pipeline.addLast(new GatewayHttpHandler(gateway::isReady));
               pipeline.addLast(new WebSocketServerProtocolHandler(WebSocketServerProtocolConfig.newBuilder()
-                  .websocketPath("/orders").maxFramePayloadLength(MAX_MESSAGE_BYTES).allowExtensions(false)
+                  .websocketPath("/orders").maxFramePayloadLength(limits.maxMessageBytes()).allowExtensions(false)
                   .handshakeTimeoutMillis(5000).build()));
-              pipeline.addLast(new WebSocketFrameAggregator(MAX_MESSAGE_BYTES));
-              pipeline.addLast(new WebSocketOrderHandler(gateway::submit, limits.maxPendingPerConnection()));
+              pipeline.addLast(new WebSocketFrameAggregator(limits.maxMessageBytes()));
+              pipeline.addLast(new WebSocketOrderHandler(gateway::submit, limits));
             }
           }).bind(new InetSocketAddress("127.0.0.1", requestedPort)).sync().channel();
     } catch (Exception failure) {

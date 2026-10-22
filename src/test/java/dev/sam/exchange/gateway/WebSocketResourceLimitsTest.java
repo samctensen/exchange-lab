@@ -3,6 +3,10 @@ package dev.sam.exchange.gateway;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.net.Socket;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.BlockingQueue;
@@ -20,6 +24,8 @@ import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import dev.sam.exchange.engine.CancelResult;
 
@@ -74,6 +80,60 @@ class WebSocketResourceLimitsTest {
       assertEquals(WebSocketOrderHandlerTest.id(2), first.response().get("requestId").getAsString());
       assertEquals(WebSocketOrderHandlerTest.id(5), first.response().get("requestId").getAsString());
       assertTrue(transport.sent.isEmpty());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void enforcesTheConfiguredMessageBoundaryForWholeAndFragmentedText(boolean fragmented) throws Exception {
+    var limits = new WebSocketLimits(4, 2, 128, 1048576, 60000, 5000);
+    try (Fixture f = new Fixture(limits)) {
+      String command = WebSocketOrderHandlerTest.cancel(1);
+      String atLimit = command + " ".repeat(128 - command.length());
+      try (var accepted = new WebSocketTestClient(f.server.port())) {
+        sendText(accepted, atLimit, fragmented);
+        assertTrue(accepted.response().has("cancel"));
+      }
+      try (var rejected = new WebSocketTestClient(f.server.port())) {
+        sendText(rejected, atLimit + " ", fragmented);
+        assertEquals(1009, rejected.closed.get(3, TimeUnit.SECONDS));
+        if (fragmented)
+          assertEquals("Message exceeds 128 bytes", rejected.closeReason.get(3, TimeUnit.SECONDS));
+      }
+    }
+  }
+
+  @Test
+  void messageLimitCountsUtf8BytesInsteadOfCharacters() throws Exception {
+    var limits = new WebSocketLimits(4, 2, 128, 1048576, 60000, 5000);
+    try (Fixture f = new Fixture(limits); var client = new WebSocketTestClient(f.server.port())) {
+      assertEquals("INVALID_ARGUMENT",
+          client.request("é".repeat(64)).getAsJsonObject("error").get("code").getAsString());
+      client.socket.sendText("é".repeat(65), true).get(3, TimeUnit.SECONDS);
+      assertEquals(1009, client.closed.get(3, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void limitsHttpContentBeforeItReachesTheHealthRoute() throws Exception {
+    var limits = new WebSocketLimits(4, 2, 128, 1048576, 60000, 5000);
+    try (Fixture f = new Fixture(limits); HttpClient http = HttpClient.newHttpClient()) {
+      URI uri = URI.create("http://127.0.0.1:" + f.server.port() + "/health/live");
+      var atLimit = HttpRequest.newBuilder(uri).method("GET", HttpRequest.BodyPublishers.ofString("x".repeat(128)))
+          .build();
+      assertEquals(400, http.send(atLimit, HttpResponse.BodyHandlers.discarding()).statusCode());
+      var overLimit = HttpRequest.newBuilder(uri).method("GET", HttpRequest.BodyPublishers.ofString("x".repeat(129)))
+          .build();
+      assertEquals(413, http.send(overLimit, HttpResponse.BodyHandlers.discarding()).statusCode());
+    }
+  }
+
+  private static void sendText(WebSocketTestClient client, String message, boolean fragmented) throws Exception {
+    if (fragmented) {
+      client.socket.sendText(message.substring(0, 64), false).get(3, TimeUnit.SECONDS);
+      client.socket.sendText(message.substring(64), true).get(3, TimeUnit.SECONDS);
+    } else {
+      client.socket.sendText(message, true).get(3, TimeUnit.SECONDS);
     }
   }
 

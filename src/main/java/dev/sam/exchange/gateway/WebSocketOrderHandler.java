@@ -23,14 +23,25 @@ final class WebSocketOrderHandler extends SimpleChannelInboundHandler<WebSocketF
   private static final int MAX_RESPONSE_BYTES = 1024 * 1024;
   private final Function<CommandRequest, CompletableFuture<CommandResult>> submit;
   private final int maxPending;
+  private final WebSocketLimits limits;
   private final WebSocketCommandCodec codec = new WebSocketCommandCodec();
   private int pending;
 
   WebSocketOrderHandler(Function<CommandRequest, CompletableFuture<CommandResult>> submit, int maxPending) {
+    this(submit, maxPending, WebSocketLimits.defaults());
+  }
+
+  WebSocketOrderHandler(Function<CommandRequest, CompletableFuture<CommandResult>> submit, WebSocketLimits limits) {
+    this(submit, Objects.requireNonNull(limits, "limits").maxPendingPerConnection(), limits);
+  }
+
+  private WebSocketOrderHandler(Function<CommandRequest, CompletableFuture<CommandResult>> submit, int maxPending,
+      WebSocketLimits limits) {
     this.submit = Objects.requireNonNull(submit, "submit");
     if (maxPending <= 0)
       throw new IllegalArgumentException("maxPending must be positive");
     this.maxPending = maxPending;
+    this.limits = limits;
   }
 
   @Override
@@ -131,7 +142,7 @@ final class WebSocketOrderHandler extends SimpleChannelInboundHandler<WebSocketF
   @Override
   public void exceptionCaught(ChannelHandlerContext ctx, Throwable failure) {
     if (failure instanceof TooLongFrameException)
-      ctx.writeAndFlush(new CloseWebSocketFrame(1009, "Message exceeds 16 KiB"))
+      ctx.writeAndFlush(new CloseWebSocketFrame(1009, "Message exceeds " + limits.maxMessageBytes() + " bytes"))
           .addListener(ChannelFutureListener.CLOSE);
     else
       ctx.close();
