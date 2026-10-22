@@ -2,7 +2,11 @@ package dev.sam.exchange.gateway;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.Locale;
+
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 
 class GatewayMetricsTest {
   private static final GatewayDiagnostics.Snapshot SNAPSHOT = new GatewayDiagnostics.Snapshot(101, 7, 9, 85, 11, 13, 17,
@@ -52,6 +56,64 @@ class GatewayMetricsTest {
       # TYPE exchange_gateway_reply_timeouts_total counter
       exchange_gateway_reply_timeouts_total 37
       """;
+
+  private static final String CAPACITY = """
+      # HELP exchange_gateway_ready Whether the gateway worker is running and its request transport is available.
+      # TYPE exchange_gateway_ready gauge
+      exchange_gateway_ready 1
+      # HELP exchange_gateway_queue_high_water Largest observed number of queued requests over the gateway lifetime.
+      # TYPE exchange_gateway_queue_high_water gauge
+      exchange_gateway_queue_high_water 19
+      # HELP exchange_gateway_active_high_water Largest number of concurrently active requests over the gateway lifetime.
+      # TYPE exchange_gateway_active_high_water gauge
+      exchange_gateway_active_high_water 23
+      # HELP exchange_gateway_queue_wait_seconds_total Total queue wait time of activated requests in seconds.
+      # TYPE exchange_gateway_queue_wait_seconds_total counter
+      exchange_gateway_queue_wait_seconds_total 1.250000001
+      # HELP exchange_gateway_queue_wait_max_seconds Largest queue wait time of activated requests in seconds.
+      # TYPE exchange_gateway_queue_wait_max_seconds gauge
+      exchange_gateway_queue_wait_max_seconds 0.750000001
+      """;
+
+  @Test
+  void emitsOnlyStableAggregateMetricsWithNanosecondsConvertedToSeconds() {
+    assertEquals(ADMISSION + OUTCOMES + TRANSPORT + CAPACITY, GatewayMetrics.render(SNAPSHOT, true));
+  }
+
+  @Test
+  @ResourceLock(Resources.LOCALE)
+  void decimalSecondsRemainValidUnderNonEnglishLocale() {
+    Locale previous = Locale.getDefault();
+    try {
+      Locale.setDefault(Locale.GERMANY);
+      assertEquals(ADMISSION + OUTCOMES + TRANSPORT + CAPACITY, GatewayMetrics.render(SNAPSHOT, true));
+    } finally {
+      Locale.setDefault(previous);
+    }
+  }
+
+  @Test
+  void unavailableEmptyGatewayHasFiniteZeroDurations() {
+    String rendered = GatewayMetrics.render(new GatewayDiagnostics().snapshot(), false);
+    assertTrue(rendered.endsWith(
+        """
+            # HELP exchange_gateway_ready Whether the gateway worker is running and its request transport is available.
+            # TYPE exchange_gateway_ready gauge
+            exchange_gateway_ready 0
+            # HELP exchange_gateway_queue_high_water Largest observed number of queued requests over the gateway lifetime.
+            # TYPE exchange_gateway_queue_high_water gauge
+            exchange_gateway_queue_high_water 0
+            # HELP exchange_gateway_active_high_water Largest number of concurrently active requests over the gateway lifetime.
+            # TYPE exchange_gateway_active_high_water gauge
+            exchange_gateway_active_high_water 0
+            # HELP exchange_gateway_queue_wait_seconds_total Total queue wait time of activated requests in seconds.
+            # TYPE exchange_gateway_queue_wait_seconds_total counter
+            exchange_gateway_queue_wait_seconds_total 0.000000000
+            # HELP exchange_gateway_queue_wait_max_seconds Largest queue wait time of activated requests in seconds.
+            # TYPE exchange_gateway_queue_wait_max_seconds gauge
+            exchange_gateway_queue_wait_max_seconds 0.000000000
+            """));
+  }
 
   @Test
   void distinguishesOffersRetriesAndEachTimeoutStage() {
