@@ -38,7 +38,8 @@ class WebSocketGatewayLimitsServerTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"--max-connections", "--max-pending-per-connection", "--max-message-bytes"})
+  @ValueSource(strings = {"--max-connections", "--max-pending-per-connection", "--max-message-bytes",
+      "--max-response-bytes"})
   void invalidIntegerLimitsFailBeforeConnecting(String flag) {
     for (String value : List.of("0", "-1", "2147483648", "bad", "")) {
       IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
@@ -75,6 +76,16 @@ class WebSocketGatewayLimitsServerTest {
         WebSocketTestClient client = new WebSocketTestClient(fixture.port)) {
       client.socket.sendText("x".repeat(129), true).get(3, TimeUnit.SECONDS);
       assertEquals(1009, client.closed.get(3, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void configuredResponseBudgetClosesAnOversizedErrorResponse() throws Exception {
+    try (Fixture fixture = new Fixture("--max-response-bytes=1");
+        WebSocketTestClient client = new WebSocketTestClient(fixture.port)) {
+      client.socket.sendText("{}", true).get(3, TimeUnit.SECONDS);
+      assertEquals(1009, client.closed.get(3, TimeUnit.SECONDS));
+      assertTrue(client.closeReason.get(3, TimeUnit.SECONDS).contains("outcome unknown"));
     }
   }
 

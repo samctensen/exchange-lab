@@ -29,6 +29,7 @@ public final class WebSocketGatewayServer {
             --max-connections=n  Maximum accepted TCP connections (default: 128)
             --max-pending-per-connection=n  Maximum pending requests per socket (default: 32)
             --max-message-bytes=n  Maximum inbound message/HTTP body bytes (default: 16384)
+            --max-response-bytes=n  Maximum JSON response bytes (default: 1048576)
             --aeron-directory=p  Existing engine Media Driver directory
                                  (default: java.io.tmpdir/exchange-lab-aeron)
             --timeout-ms=n       Timeout for each send and reply wait in milliseconds (default: 5000)
@@ -126,6 +127,7 @@ public final class WebSocketGatewayServer {
       int maxConnections = defaults.maxConnections();
       int maxPendingPerConnection = defaults.maxPendingPerConnection();
       int maxMessageBytes = defaults.maxMessageBytes();
+      int maxResponseBytes = defaults.maxResponseBytes();
       var seen = new HashSet<String>();
       for (String arg : args) {
         String[] parts = arg.split("=", 2);
@@ -138,6 +140,7 @@ public final class WebSocketGatewayServer {
           case "--max-connections" -> maxConnections = positiveIntegerValue(parts);
           case "--max-pending-per-connection" -> maxPendingPerConnection = positiveIntegerValue(parts);
           case "--max-message-bytes" -> maxMessageBytes = positiveIntegerValue(parts);
+          case "--max-response-bytes" -> maxResponseBytes = positiveIntegerValue(parts);
           case "--aeron-directory" -> aeronDirectory = argumentValue(parts);
           case "--timeout-ms" -> timeout = timeoutValue(parts);
           case "--diagnostics" -> {
@@ -154,8 +157,8 @@ public final class WebSocketGatewayServer {
         }
       }
       return new Config(port, queueCapacity, maxInFlight, aeronDirectory, new ClientConfig(timeout, maxAttempts),
-          diagnostics, new WebSocketLimits(maxConnections, maxPendingPerConnection, maxMessageBytes,
-              defaults.maxResponseBytes(), defaults.readIdleTimeoutMillis(), defaults.handshakeTimeoutMillis()));
+          diagnostics, new WebSocketLimits(maxConnections, maxPendingPerConnection, maxMessageBytes, maxResponseBytes,
+              defaults.readIdleTimeoutMillis(), defaults.handshakeTimeoutMillis()));
     }
 
     private static Duration timeoutValue(String[] parts) {
