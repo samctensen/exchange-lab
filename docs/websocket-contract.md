@@ -129,10 +129,14 @@ An admission rejection describes **this submission**. A previous attempt with th
 
 ## Bounds and lifecycle
 
+The defaults below can be adjusted with the [resource-limit options](gateway-limits.md).
+The outbound watermarks remain fixed.
+
 - 16 KiB maximum inbound text message, including all fragments; binary data is unsupported.
 - 32 pending responses per connection, with a slot retained until the write completes.
 - 128 simultaneous connections, plus the shared gateway queue/window limits above.
 - 64/128 KiB outbound low/high watermarks; unwritable connections are closed to bound retained output. Large replies can reach that limit even below the separate 1 MiB response cap.
+- WebSocket upgrade completion has a five-second deadline by default.
 - Connections idle for 60 seconds without inbound traffic close. Native WebSocket ping frames are handled by Netty. Browsers must reconnect after idle closure; an application heartbeat is future work.
 - Close code 1003 rejects binary messages; 1009 rejects excessive message size; 1001 announces gateway shutdown. An abrupt close or failure to deliver a result leaves admitted work uncertain.
 

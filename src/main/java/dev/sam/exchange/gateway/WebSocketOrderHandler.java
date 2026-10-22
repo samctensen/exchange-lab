@@ -20,17 +20,27 @@ import io.netty.handler.timeout.IdleStateEvent;
 
 /** One instance per socket. All mutable state belongs to that socket's event loop. */
 final class WebSocketOrderHandler extends SimpleChannelInboundHandler<WebSocketFrame> {
-  private static final int MAX_RESPONSE_BYTES = 1024 * 1024;
   private final Function<CommandRequest, CompletableFuture<CommandResult>> submit;
   private final int maxPending;
+  private final WebSocketLimits limits;
   private final WebSocketCommandCodec codec = new WebSocketCommandCodec();
   private int pending;
 
   WebSocketOrderHandler(Function<CommandRequest, CompletableFuture<CommandResult>> submit, int maxPending) {
+    this(submit, maxPending, WebSocketLimits.defaults());
+  }
+
+  WebSocketOrderHandler(Function<CommandRequest, CompletableFuture<CommandResult>> submit, WebSocketLimits limits) {
+    this(submit, Objects.requireNonNull(limits, "limits").maxPendingPerConnection(), limits);
+  }
+
+  private WebSocketOrderHandler(Function<CommandRequest, CompletableFuture<CommandResult>> submit, int maxPending,
+      WebSocketLimits limits) {
     this.submit = Objects.requireNonNull(submit, "submit");
     if (maxPending <= 0)
       throw new IllegalArgumentException("maxPending must be positive");
     this.maxPending = maxPending;
+    this.limits = limits;
   }
 
   @Override
@@ -104,7 +114,7 @@ final class WebSocketOrderHandler extends SimpleChannelInboundHandler<WebSocketF
     if (!ctx.channel().isActive() || !ctx.channel().isWritable())
       return ctx.close();
     TextWebSocketFrame frame = new TextWebSocketFrame(response);
-    if (frame.content().readableBytes() > MAX_RESPONSE_BYTES) {
+    if (frame.content().readableBytes() > limits.maxResponseBytes()) {
       frame.release();
       return ctx.writeAndFlush(new CloseWebSocketFrame(1009, "Response too large; outcome unknown"))
           .addListener(ChannelFutureListener.CLOSE);
@@ -131,7 +141,7 @@ final class WebSocketOrderHandler extends SimpleChannelInboundHandler<WebSocketF
   @Override
   public void exceptionCaught(ChannelHandlerContext ctx, Throwable failure) {
     if (failure instanceof TooLongFrameException)
-      ctx.writeAndFlush(new CloseWebSocketFrame(1009, "Message exceeds 16 KiB"))
+      ctx.writeAndFlush(new CloseWebSocketFrame(1009, "Message exceeds " + limits.maxMessageBytes() + " bytes"))
           .addListener(ChannelFutureListener.CLOSE);
     else
       ctx.close();

@@ -76,6 +76,9 @@ Startup finds the single recording tagged `exchange-request-log` on stream **200
 
 If the server stops after recording a request but before applying it or delivering its reply, recovery applies it. The client must retry an uncertain outcome using the **same UUID and command**. This is replay-safe execution with correlated retries; it does not guarantee that a reply is delivered exactly once.
 
+See [Archive recovery operations](docs/archive-recovery.md) for exact recording selection,
+interruption, malformed-history diagnostics and failed-close cleanup.
+
 Read the implementation in this order:
 
 1. `RequestStateMachine`: pure request execution and deduplication, with no persistence calls.
@@ -118,14 +121,16 @@ shared runners.
 4. Stop the gateway with **⌃C** before stopping the engine.
 
 See [gateway operations](docs/gateway-operations.md) for launcher help, driver selection,
-timeout/retry settings, and terminal commands.
+timeout/retry settings, and terminal commands. The [resource-limit guide](docs/gateway-limits.md)
+explains configurable connection, pending-request, byte and socket-timeout budgets.
 
 Use HTTP `/health/live` and `/health/ready` on the gateway port to check its listener
 and Aeron availability without submitting an order. See [health checks](docs/gateway-health.md)
 for GET/HEAD examples and what readiness can guarantee.
 
 Add `--diagnostics` to print [gateway lifetime counters](docs/gateway-diagnostics.md)
-after shutdown drains accepted work. It is disabled by default.
+after shutdown drains accepted work. Add `--metrics` for [Prometheus scraping](docs/gateway-metrics.md)
+while the gateway runs. Both flags are independent and disabled by default.
 
 This endpoint is local-only and has no authentication or TLS. Each gateway has its own
 Aeron response route; use different `--port` values when running multiple gateway instances.

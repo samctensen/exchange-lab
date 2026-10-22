@@ -23,27 +23,35 @@ public final class WebSocketGatewayServer {
           Local demo endpoint: ws://127.0.0.1:8080/orders (no authentication or TLS)
           Start AeronEngineServer before this gateway.
 
-            --port=n             Listen port, 0..65535; 0 selects an available port (default: 8080)
-            --queue-capacity=n   Maximum queued requests, positive integer (default: 128)
-            --max-in-flight=n    Maximum active requests, positive integer (default: 8)
-            --aeron-directory=p  Existing engine Media Driver directory
-                                 (default: java.io.tmpdir/exchange-lab-aeron)
-            --timeout-ms=n       Timeout for each send and reply wait in milliseconds (default: 5000)
-            --max-attempts=n     Total send attempts, including the first (default: 3; minimum: 1)
-            --diagnostics        Print aggregate lifetime counters after shutdown drain (default: off)
-            --help               Print this help and exit; use by itself
+            --port=n                        Listen port, 0..65535; 0 selects an available port (default: 8080)
+            --queue-capacity=n              Maximum queued requests, positive integer (default: 128)
+            --max-in-flight=n               Maximum active requests, positive integer (default: 8)
+            --max-connections=n             Maximum accepted TCP connections (default: 128)
+            --max-pending-per-connection=n  Maximum pending requests per socket (default: 32)
+            --max-message-bytes=n           Maximum inbound message/HTTP body bytes (default: 16384)
+            --max-response-bytes=n          Maximum JSON response bytes (default: 1048576)
+            --read-idle-timeout-ms=n        Close connections without reads (default: 60000)
+            --handshake-timeout-ms=n        WebSocket upgrade completion timeout (default: 5000)
+            --aeron-directory=p             Existing engine Media Driver directory
+                                            (default: java.io.tmpdir/exchange-lab-aeron)
+            --timeout-ms=n                  Timeout for each send and reply wait in milliseconds (default: 5000)
+            --max-attempts=n                Total send attempts, including the first (default: 3; minimum: 1)
+            --diagnostics                   Print aggregate lifetime counters after shutdown drain (default: off)
+            --metrics                       Expose aggregate Prometheus counters at /metrics (default: off)
+            --help                          Print this help and exit; use by itself
           """);
       return;
     }
     Config config = Config.parse(args);
-    GatewayDiagnostics diagnostics = config.diagnostics() ? new GatewayDiagnostics() : null;
+    GatewayDiagnostics diagnostics = config.diagnostics() || config.metrics() ? new GatewayDiagnostics() : null;
     Thread shutdownHook = null;
     try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(config.aeronDirectory()));
         Subscription replies = aeron.addSubscription("aeron:ipc?control-mode=response", 2);
         Publication requests = aeron.addPublication("aeron:ipc?response-correlation-id=" + replies.registrationId(), 1);
         EngineGateway gateway = new EngineGateway(new AeronRequestClient(requests, replies, config.clientConfig()),
             config.queueCapacity(), config.maxInFlight(), diagnostics);
-        WebSocketGateway server = new WebSocketGateway(gateway, config.port())) {
+        WebSocketGateway server = new WebSocketGateway(gateway, config.port(), config.webSocketLimits(),
+            config.metrics() ? () -> GatewayMetrics.render(diagnostics.snapshot(), gateway.isReady()) : null)) {
       gateway.start();
       server.start();
       Thread mainThread = Thread.currentThread();
@@ -64,7 +72,7 @@ public final class WebSocketGatewayServer {
       server.awaitClose();
     } finally {
       // Resource closure above drains the gateway before the lifetime counters are reported.
-      if (diagnostics != null)
+      if (config.diagnostics())
         System.out.print(diagnostics.summarize());
       if (shutdownHook != null) {
         try {
@@ -77,7 +85,17 @@ public final class WebSocketGatewayServer {
   }
 
   record Config(int port, int queueCapacity, int maxInFlight, String aeronDirectory, ClientConfig clientConfig,
-      boolean diagnostics) {
+      boolean diagnostics, WebSocketLimits webSocketLimits, boolean metrics) {
+    Config(int port, int queueCapacity, int maxInFlight, String aeronDirectory, ClientConfig clientConfig,
+        boolean diagnostics, WebSocketLimits webSocketLimits) {
+      this(port, queueCapacity, maxInFlight, aeronDirectory, clientConfig, diagnostics, webSocketLimits, false);
+    }
+
+    Config(int port, int queueCapacity, int maxInFlight, String aeronDirectory, ClientConfig clientConfig,
+        boolean diagnostics) {
+      this(port, queueCapacity, maxInFlight, aeronDirectory, clientConfig, diagnostics, WebSocketLimits.defaults());
+    }
+
     Config(int port, int queueCapacity, int maxInFlight, String aeronDirectory, ClientConfig clientConfig) {
       this(port, queueCapacity, maxInFlight, aeronDirectory, clientConfig, false);
     }
@@ -102,6 +120,8 @@ public final class WebSocketGatewayServer {
       }
       if (clientConfig == null)
         throw new IllegalArgumentException("clientConfig must not be null");
+      if (webSocketLimits == null)
+        throw new IllegalArgumentException("webSocketLimits must not be null");
     }
 
     static Config parse(String[] args) {
@@ -112,6 +132,14 @@ public final class WebSocketGatewayServer {
       Duration timeout = ClientConfig.defaults().timeout();
       int maxAttempts = ClientConfig.defaults().maxAttempts();
       boolean diagnostics = false;
+      boolean metrics = false;
+      WebSocketLimits defaults = WebSocketLimits.defaults();
+      int maxConnections = defaults.maxConnections();
+      int maxPendingPerConnection = defaults.maxPendingPerConnection();
+      int maxMessageBytes = defaults.maxMessageBytes();
+      int maxResponseBytes = defaults.maxResponseBytes();
+      long readIdleTimeoutMillis = defaults.readIdleTimeoutMillis();
+      long handshakeTimeoutMillis = defaults.handshakeTimeoutMillis();
       var seen = new HashSet<String>();
       for (String arg : args) {
         String[] parts = arg.split("=", 2);
@@ -121,12 +149,23 @@ public final class WebSocketGatewayServer {
           case "--port" -> port = integerValue(parts);
           case "--queue-capacity" -> queueCapacity = integerValue(parts);
           case "--max-in-flight" -> maxInFlight = integerValue(parts);
+          case "--max-connections" -> maxConnections = positiveIntegerValue(parts);
+          case "--max-pending-per-connection" -> maxPendingPerConnection = positiveIntegerValue(parts);
+          case "--max-message-bytes" -> maxMessageBytes = positiveIntegerValue(parts);
+          case "--max-response-bytes" -> maxResponseBytes = positiveIntegerValue(parts);
+          case "--read-idle-timeout-ms" -> readIdleTimeoutMillis = millisecondValue(parts);
+          case "--handshake-timeout-ms" -> handshakeTimeoutMillis = millisecondValue(parts);
           case "--aeron-directory" -> aeronDirectory = argumentValue(parts);
-          case "--timeout-ms" -> timeout = timeoutValue(parts);
+          case "--timeout-ms" -> timeout = Duration.ofMillis(millisecondValue(parts));
           case "--diagnostics" -> {
             if (parts.length != 1)
               throw new IllegalArgumentException("--diagnostics does not take a value");
             diagnostics = true;
+          }
+          case "--metrics" -> {
+            if (parts.length != 1)
+              throw new IllegalArgumentException("--metrics does not take a value");
+            metrics = true;
           }
           case "--max-attempts" -> {
             maxAttempts = integerValue(parts);
@@ -137,20 +176,22 @@ public final class WebSocketGatewayServer {
         }
       }
       return new Config(port, queueCapacity, maxInFlight, aeronDirectory, new ClientConfig(timeout, maxAttempts),
-          diagnostics);
+          diagnostics, new WebSocketLimits(maxConnections, maxPendingPerConnection, maxMessageBytes, maxResponseBytes,
+              readIdleTimeoutMillis, handshakeTimeoutMillis),
+          metrics);
     }
 
-    private static Duration timeoutValue(String[] parts) {
+    private static long millisecondValue(String[] parts) {
       String value = argumentValue(parts);
       long milliseconds;
       try {
         milliseconds = Long.parseLong(value);
       } catch (NumberFormatException error) {
-        throw new IllegalArgumentException("--timeout-ms must be a 64-bit integer: " + value, error);
+        throw new IllegalArgumentException(parts[0] + " must be a 64-bit integer: " + value, error);
       }
       if (milliseconds < 1 || milliseconds > Long.MAX_VALUE / 1_000_000)
-        throw new IllegalArgumentException("--timeout-ms must be positive and representable in nanoseconds");
-      return Duration.ofMillis(milliseconds);
+        throw new IllegalArgumentException(parts[0] + " must be positive and representable in nanoseconds");
+      return milliseconds;
     }
 
     private static int integerValue(String[] parts) {
@@ -160,6 +201,13 @@ public final class WebSocketGatewayServer {
       } catch (NumberFormatException error) {
         throw new IllegalArgumentException(parts[0] + " must be a 32-bit integer: " + value, error);
       }
+    }
+
+    private static int positiveIntegerValue(String[] parts) {
+      int value = integerValue(parts);
+      if (value < 1)
+        throw new IllegalArgumentException(parts[0] + " must be positive");
+      return value;
     }
 
     private static String argumentValue(String[] parts) {

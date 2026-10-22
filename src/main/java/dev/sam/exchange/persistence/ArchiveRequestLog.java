@@ -16,7 +16,8 @@ import dev.sam.exchange.transport.CommandRequest;
 import io.aeron.ChannelUri;
 import io.aeron.ChannelUriStringBuilder;
 import io.aeron.ExclusivePublication;
-import io.aeron.FragmentAssembler;
+import io.aeron.ControlledFragmentAssembler;
+import io.aeron.logbuffer.ControlledFragmentHandler.Action;
 import io.aeron.Image;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -29,6 +30,7 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
   private static final String ALIAS = "exchange-request-log";
   private static final int LOG_STREAM_ID = 2001;
   private static final int REPLAY_STREAM_ID = 2002;
+  private static final int CATALOGUE_BATCH_SIZE = 16;
   private static final long TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
 
   private record Recording(long id, long start, long stop, int initialTermId, int termLength, int mtu) {
@@ -59,6 +61,7 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
   /** Replay before opening the writer, so no new request can overtake recovery. */
   public static ArchiveRequestLog open(AeronArchive archive, Consumer<CommandRequest> recovery) {
     Objects.requireNonNull(recovery, "recovery");
+    checkInterrupted("request log open");
     Recording recording = findRecording(archive);
     if (recording != null)
       replay(archive, recording, recovery);
@@ -136,6 +139,7 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
   /** Stream recovery without materializing the recording as a list. */
   public static void replay(AeronArchive archive, Consumer<CommandRequest> recovery) {
     Objects.requireNonNull(recovery, "recovery");
+    checkInterrupted("request replay");
     Recording recording = findRecording(archive);
     if (recording != null)
       replay(archive, recording, recovery);
@@ -143,11 +147,20 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
 
   private static Recording findRecording(AeronArchive archive) {
     List<Recording> found = new ArrayList<>();
-    archive.listRecordingsForUri(0, 2, "alias=" + ALIAS, LOG_STREAM_ID,
-        (controlSessionId, correlationId, recordingId, startTimestamp, stopTimestamp, startPosition, stopPosition,
-            initialTermId, segmentFileLength, termBufferLength, mtuLength, sessionId, streamId, strippedChannel,
-            originalChannel, sourceIdentity) -> found.add(
-                new Recording(recordingId, startPosition, stopPosition, initialTermId, termBufferLength, mtuLength)));
+    long[] nextRecordingId = {0};
+    int count;
+    do {
+      count = archive.listRecordingsForUri(nextRecordingId[0], CATALOGUE_BATCH_SIZE, "alias=" + ALIAS, LOG_STREAM_ID,
+          (controlSessionId, correlationId, recordingId, startTimestamp, stopTimestamp, startPosition, stopPosition,
+              initialTermId, segmentFileLength, termBufferLength, mtuLength, sessionId, streamId, strippedChannel,
+              originalChannel, sourceIdentity) -> {
+            nextRecordingId[0] = recordingId + 1;
+            if (ALIAS.equals(ChannelUri.parse(originalChannel).get("alias"))) {
+              found.add(
+                  new Recording(recordingId, startPosition, stopPosition, initialTermId, termBufferLength, mtuLength));
+            }
+          });
+    } while (count == CATALOGUE_BATCH_SIZE && found.size() < 2);
     if (found.size() > 1)
       throw new IllegalStateException("Multiple request recordings; cannot determine one ordered log");
     if (found.isEmpty())
@@ -167,12 +180,36 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
         "aeron:ipc", REPLAY_STREAM_ID)) {
       await(() -> replay.imageCount() > 0, archive, "request replay to connect");
       Image image = replay.imageAtIndex(0);
-      FragmentAssembler assembler = new FragmentAssembler(
-          (buffer, offset, length, header) -> recovery.accept(decoder.decode(buffer, offset, length)));
+      RuntimeException[] recoveryFailure = {null};
+      ControlledFragmentAssembler assembler = new ControlledFragmentAssembler((buffer, offset, length, header) -> {
+        if (Thread.currentThread().isInterrupted())
+          return Action.ABORT;
+        CommandRequest request;
+        try {
+          request = decoder.decode(buffer, offset, length);
+        } catch (RuntimeException failure) {
+          recoveryFailure[0] = new IllegalStateException(
+              "Invalid request in recording " + recording.id() + " at frame end position " + header.position(),
+              failure);
+          return Action.BREAK;
+        }
+        try {
+          recovery.accept(request);
+        } catch (RuntimeException failure) {
+          // Image polling sends handler exceptions to the borrowed client's error handler, which may only log them.
+          recoveryFailure[0] = failure;
+          return Action.BREAK;
+        }
+        return Thread.currentThread().isInterrupted() ? Action.BREAK : Action.CONTINUE;
+      });
       SleepingIdleStrategy idle = new SleepingIdleStrategy();
       long deadline = System.nanoTime() + TIMEOUT_NS;
       while (image.position() < recording.stop()) {
-        int fragments = image.poll(assembler, 10);
+        checkInterrupted("request replay progress");
+        int fragments = image.controlledPoll(assembler, 10);
+        if (recoveryFailure[0] != null)
+          throw recoveryFailure[0];
+        checkInterrupted("request replay progress");
         if (image.position() >= recording.stop())
           break;
         if (image.isClosed())
@@ -191,17 +228,54 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
     if (closed)
       return;
     closed = true;
+    Throwable failure = null;
     try {
       // An offered request may be recorded even if shutdown happened before application or reply.
       // Recovery then applies it; the caller must retry uncertain outcomes using the same UUID.
+      checkInterrupted("final request recording");
       await(() -> RecordingPos.isActive(counters, counterId, recordingId)
           ? counters.getCounterValue(counterId) >= offeredPosition
           : archive.getStopPosition(recordingId) >= offeredPosition, archive, "final request recording");
-      archive.tryStopRecording(subscriptionId);
-      await(() -> archive.getStopPosition(recordingId) >= offeredPosition, archive, "request recording to stop");
-    } finally {
-      publication.close();
+    } catch (RuntimeException | Error cause) {
+      failure = cause;
     }
+
+    // Archive RPCs can send a request and then fail while waiting on an interrupted thread.
+    // Clear the flag only for bounded cleanup, and restore it before returning to the caller.
+    boolean interrupted = Thread.interrupted();
+    try {
+      try {
+        archive.tryStopRecording(subscriptionId);
+        boolean flushed = failure == null;
+        await(() -> {
+          long stopPosition = archive.getStopPosition(recordingId);
+          return flushed ? stopPosition >= offeredPosition : stopPosition != AeronArchive.NULL_POSITION;
+        }, archive, "request recording to stop");
+      } catch (RuntimeException | Error cleanup) {
+        failure = addFailure(failure, cleanup);
+      }
+      interrupted |= Thread.interrupted();
+      try {
+        publication.close();
+      } catch (RuntimeException | Error cleanup) {
+        failure = addFailure(failure, cleanup);
+      }
+    } finally {
+      if (interrupted)
+        Thread.currentThread().interrupt();
+    }
+    if (failure instanceof RuntimeException exception)
+      throw exception;
+    if (failure instanceof Error error)
+      throw error;
+  }
+
+  private static Throwable addFailure(Throwable primary, Throwable failure) {
+    if (primary == null)
+      return failure;
+    if (primary != failure)
+      primary.addSuppressed(failure);
+    return primary;
   }
 
   private static void await(BooleanSupplier done, AeronArchive archive, String operation) {
@@ -213,10 +287,14 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
     }
   }
 
-  private static void checkWait(AeronArchive archive, long deadline, String operation) {
-    archive.checkForErrorResponse();
+  private static void checkInterrupted(String operation) {
     if (Thread.currentThread().isInterrupted())
       throw new IllegalStateException("Interrupted waiting for " + operation);
+  }
+
+  private static void checkWait(AeronArchive archive, long deadline, String operation) {
+    archive.checkForErrorResponse();
+    checkInterrupted(operation);
     if (System.nanoTime() - deadline >= 0)
       throw new IllegalStateException("Timed out waiting for " + operation);
   }

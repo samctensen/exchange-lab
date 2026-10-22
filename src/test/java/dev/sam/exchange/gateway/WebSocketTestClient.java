@@ -19,6 +19,7 @@ final class WebSocketTestClient implements WebSocket.Listener, AutoCloseable {
   private final HttpClient http = HttpClient.newHttpClient();
   private final BlockingQueue<String> messages = new LinkedBlockingQueue<>();
   private final StringBuilder fragments = new StringBuilder();
+  final CompletableFuture<String> closeReason = new CompletableFuture<>();
   final CompletableFuture<Integer> closed = new CompletableFuture<>();
   final WebSocket socket;
 
@@ -50,6 +51,7 @@ final class WebSocketTestClient implements WebSocket.Listener, AutoCloseable {
 
   @Override
   public CompletionStage<?> onClose(WebSocket socket, int statusCode, String reason) {
+    closeReason.complete(reason);
     closed.complete(statusCode);
     return null;
   }

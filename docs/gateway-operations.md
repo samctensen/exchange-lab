@@ -78,9 +78,16 @@ values, and invalid values fail before connecting to Aeron or opening a socket.
 | `--port=n` | `8080` | Loopback listener port, `0..65535`; zero selects an available port. |
 | `--queue-capacity=n` | `128` | Maximum queued requests waiting for an active slot. Positive 32-bit integer. |
 | `--max-in-flight=n` | `8` | Maximum active requests being offered or awaiting replies. Positive 32-bit integer. |
+| `--max-connections=n` | `128` | Maximum accepted TCP connections, including HTTP and unupgraded sockets. |
+| `--max-pending-per-connection=n` | `32` | Pending requests per WebSocket, retained until response writes finish. |
+| `--max-message-bytes=n` | `16384` | Maximum inbound WebSocket message and HTTP body bytes. |
+| `--max-response-bytes=n` | `1048576` | Maximum encoded JSON response bytes. |
+| `--read-idle-timeout-ms=n` | `60000` | Close a connection after this many milliseconds without reads. |
+| `--handshake-timeout-ms=n` | `5000` | Deadline for completing an initiated WebSocket upgrade. |
 | `--aeron-directory=path` | `java.io.tmpdir/exchange-lab-aeron` | Existing engine Media Driver directory; a nonblank path. This is not the Archive directory. |
 | `--timeout-ms=n` | `5000` | Timeout for each send phase and each reply wait. Integer milliseconds, `1..9223372036854`, so conversion to nanoseconds cannot overflow. |
 | `--max-attempts=n` | `3` | Total attempts including the first; `1` disables automatic retries after a missing reply. Positive 32-bit integer. |
+| `--metrics` | Off | Expose aggregate Prometheus text at `/metrics`; independent of the shutdown report. |
 | `--diagnostics` | Off | Print aggregate lifetime counters after shutdown drains accepted work; takes no value. |
 | `--help` | — | Print usage and exit without starting resources; use by itself. |
 
@@ -92,7 +99,9 @@ java -cp "target/classes:$(cat target/runtime-classpath.txt)" \
 ```
 
 Queue capacity and the active window are separate limits. Increasing them does
-not change the WebSocket contract's per-connection pending limit or message limits.
+not change the per-connection pending limit or message limits. See the
+[resource-limit guide](gateway-limits.md) for valid ranges, defaults and how
+these independent budgets interact.
 The timeout starts when a request becomes active; time spent waiting in the queue
 is additional. Each attempt gets a send deadline and, after publication accepts
 it, a reply deadline. Temporary offer back pressure is retried within the send
@@ -107,6 +116,9 @@ terminal failure, and retry counters after shutdown. The report includes work
 that finishes during the drain and retains no request payloads. See
 [gateway diagnostics](gateway-diagnostics.md) for counter definitions and how
 to interpret uncertain outcomes.
+
+Live collection is available with `--metrics`; see the [metrics guide](gateway-metrics.md)
+for names, scrape examples and interpretation. Both monitoring flags are off by default.
 
 ## Stop and reconcile
 
