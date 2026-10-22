@@ -16,7 +16,8 @@ import dev.sam.exchange.transport.CommandRequest;
 import io.aeron.ChannelUri;
 import io.aeron.ChannelUriStringBuilder;
 import io.aeron.ExclusivePublication;
-import io.aeron.FragmentAssembler;
+import io.aeron.ControlledFragmentAssembler;
+import io.aeron.logbuffer.ControlledFragmentHandler.Action;
 import io.aeron.Image;
 import io.aeron.Publication;
 import io.aeron.Subscription;
@@ -179,12 +180,18 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
         "aeron:ipc", REPLAY_STREAM_ID)) {
       await(() -> replay.imageCount() > 0, archive, "request replay to connect");
       Image image = replay.imageAtIndex(0);
-      FragmentAssembler assembler = new FragmentAssembler(
-          (buffer, offset, length, header) -> recovery.accept(decoder.decode(buffer, offset, length)));
+      ControlledFragmentAssembler assembler = new ControlledFragmentAssembler((buffer, offset, length, header) -> {
+        if (Thread.currentThread().isInterrupted())
+          return Action.ABORT;
+        recovery.accept(decoder.decode(buffer, offset, length));
+        return Thread.currentThread().isInterrupted() ? Action.BREAK : Action.CONTINUE;
+      });
       SleepingIdleStrategy idle = new SleepingIdleStrategy();
       long deadline = System.nanoTime() + TIMEOUT_NS;
       while (image.position() < recording.stop()) {
-        int fragments = image.poll(assembler, 10);
+        checkInterrupted("request replay progress");
+        int fragments = image.controlledPoll(assembler, 10);
+        checkInterrupted("request replay progress");
         if (image.position() >= recording.stop())
           break;
         if (image.isClosed())

@@ -15,6 +15,8 @@ import org.agrona.concurrent.status.CountersReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.protocol.SbeRequestCodec;
@@ -95,6 +97,43 @@ class ArchiveRequestLogRecoveryTest {
       try (ArchiveRequestLog log = ArchiveRequestLog.open(f.archive, r -> fail("History must remain empty"))) {
         assertTrue(log.recordingId() >= 0);
       }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false,1", "false,3", "false,20", "true,1", "true,3", "true,20"})
+  void interruptionInRecoveryStopsBeforeTheNextCommand(boolean openWriter, int requestCount, @TempDir Path directory) {
+    try (Fixture f = new Fixture(directory)) {
+      List<CommandRequest> expected = new ArrayList<>();
+      for (int i = 1; i <= requestCount; i++)
+        expected.add(request(i));
+      Recorded saved = record(f, "exchange-request-log", expected.toArray(CommandRequest[]::new));
+      List<CommandRequest> recovered = new ArrayList<>();
+      java.util.function.Consumer<CommandRequest> recovery = request -> {
+        recovered.add(request);
+        Thread.currentThread().interrupt();
+      };
+      try {
+        IllegalStateException failure = assertThrows(IllegalStateException.class, () -> {
+          if (openWriter) {
+            try (ArchiveRequestLog unexpected = ArchiveRequestLog.open(f.archive, recovery)) {
+              fail("Interrupted recovery opened recording " + unexpected.recordingId());
+            }
+          } else {
+            ArchiveRequestLog.replay(f.archive, recovery);
+          }
+        });
+        assertTrue(failure.getMessage().contains("Interrupted"), failure.getMessage());
+        assertTrue(Thread.currentThread().isInterrupted());
+        assertEquals(List.of(request(1)), recovered, "Interruption must stop within the current poll batch");
+      } finally {
+        Thread.interrupted();
+      }
+      assertEquals(saved.stop(), f.archive.getStopPosition(saved.id()),
+          "Interrupted recovery must leave history stopped");
+      recovered.clear();
+      ArchiveRequestLog.replay(f.archive, recovered::add);
+      assertEquals(expected, recovered);
     }
   }
 
