@@ -26,6 +26,7 @@ import dev.sam.exchange.transport.CommandRequest;
 import io.aeron.CommonContext;
 import io.aeron.Aeron;
 import io.aeron.ExclusivePublication;
+import io.aeron.Subscription;
 import io.aeron.archive.Archive;
 import io.aeron.archive.ArchivingMediaDriver;
 import io.aeron.archive.client.AeronArchive;
@@ -203,6 +204,57 @@ class ArchiveRequestLogRecoveryTest {
         assertEquals(saved.stop(), f.archive.getStopPosition(saved.id()), "Malformed history must remain stopped");
       }
       assertTrue(subscriberErrors.isEmpty());
+    }
+  }
+
+  @Test
+  void interruptedCloseStopsTheOwnedRecordingAndPreservesRecoverableHistory(@TempDir Path directory) {
+    try (Fixture f = new Fixture(directory)) {
+      ArchiveRequestLog log = ArchiveRequestLog.open(f.archive, r -> fail("New history must be empty"));
+      long[] offered = {-1};
+      await(() -> (offered[0] = log.offer(request(1))) >= 0);
+      await(() -> log.isRecorded(offered[0]));
+      long id = log.recordingId();
+      Thread.currentThread().interrupt();
+      try {
+        IllegalStateException failure = assertThrows(IllegalStateException.class, log::close);
+        assertTrue(failure.getMessage().contains("Interrupted"), failure.getMessage());
+        assertTrue(Thread.currentThread().isInterrupted());
+      } finally {
+        Thread.interrupted();
+      }
+      assertEquals(offered[0], f.archive.getStopPosition(id), "Failed close must still finish recording cleanup");
+      assertThrows(IllegalStateException.class, () -> log.offer(request(2)));
+      List<CommandRequest> recovered = new ArrayList<>();
+      try (ArchiveRequestLog reopened = ArchiveRequestLog.open(f.archive, recovered::add)) {
+        assertEquals(id, reopened.recordingId());
+        assertEquals(List.of(request(1)), recovered);
+      }
+    }
+  }
+
+  @Test
+  void closePreservesItsPrimaryFailureWhenStoppingTheRecordingAlsoFails(@TempDir Path directory) {
+    try (Fixture f = new Fixture(directory)) {
+      Aeron aeron = f.archive.context().aeron();
+      // Keep the borrowed Aeron client alive so only the Archive control connection fails.
+      f.archive.context().ownsAeronClient(false);
+      try (aeron; Subscription observer = aeron.addSubscription("aeron:ipc?alias=exchange-request-log", 2001)) {
+        ArchiveRequestLog log = ArchiveRequestLog.open(f.archive, r -> fail("New history must be empty"));
+        await(observer::isConnected);
+        f.archive.close();
+        Thread.currentThread().interrupt();
+        try {
+          IllegalStateException failure = assertThrows(IllegalStateException.class, log::close);
+          assertTrue(failure.getMessage().contains("Interrupted"), failure.getMessage());
+          assertEquals(1, failure.getSuppressed().length, "The failed stop must be attached to the interruption");
+          assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+          Thread.interrupted();
+        }
+        await(() -> !observer.isConnected());
+        log.close();
+      }
     }
   }
 

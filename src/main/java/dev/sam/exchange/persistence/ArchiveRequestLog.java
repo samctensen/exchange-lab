@@ -228,17 +228,54 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
     if (closed)
       return;
     closed = true;
+    Throwable failure = null;
     try {
       // An offered request may be recorded even if shutdown happened before application or reply.
       // Recovery then applies it; the caller must retry uncertain outcomes using the same UUID.
+      checkInterrupted("final request recording");
       await(() -> RecordingPos.isActive(counters, counterId, recordingId)
           ? counters.getCounterValue(counterId) >= offeredPosition
           : archive.getStopPosition(recordingId) >= offeredPosition, archive, "final request recording");
-      archive.tryStopRecording(subscriptionId);
-      await(() -> archive.getStopPosition(recordingId) >= offeredPosition, archive, "request recording to stop");
-    } finally {
-      publication.close();
+    } catch (RuntimeException | Error cause) {
+      failure = cause;
     }
+
+    // Archive RPCs can send a request and then fail while waiting on an interrupted thread.
+    // Clear the flag only for bounded cleanup, and restore it before returning to the caller.
+    boolean interrupted = Thread.interrupted();
+    try {
+      try {
+        archive.tryStopRecording(subscriptionId);
+        boolean flushed = failure == null;
+        await(() -> {
+          long stopPosition = archive.getStopPosition(recordingId);
+          return flushed ? stopPosition >= offeredPosition : stopPosition != AeronArchive.NULL_POSITION;
+        }, archive, "request recording to stop");
+      } catch (RuntimeException | Error cleanup) {
+        failure = addFailure(failure, cleanup);
+      }
+      interrupted |= Thread.interrupted();
+      try {
+        publication.close();
+      } catch (RuntimeException | Error cleanup) {
+        failure = addFailure(failure, cleanup);
+      }
+    } finally {
+      if (interrupted)
+        Thread.currentThread().interrupt();
+    }
+    if (failure instanceof RuntimeException exception)
+      throw exception;
+    if (failure instanceof Error error)
+      throw error;
+  }
+
+  private static Throwable addFailure(Throwable primary, Throwable failure) {
+    if (primary == null)
+      return failure;
+    if (primary != failure)
+      primary.addSuppressed(failure);
+    return primary;
   }
 
   private static void await(BooleanSupplier done, AeronArchive archive, String operation) {
