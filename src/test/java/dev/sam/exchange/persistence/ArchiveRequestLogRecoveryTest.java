@@ -56,6 +56,24 @@ class ArchiveRequestLogRecoveryTest {
     }
   }
 
+  @Test
+  void rejectsInterruptedReplayBeforeCatalogueIoEvenForEmptyHistory(@TempDir Path directory) {
+    try (Fixture f = new Fixture(directory)) {
+      long correlationId = f.archive.lastCorrelationId();
+      Thread.currentThread().interrupt();
+      try {
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+            () -> ArchiveRequestLog.replay(f.archive, r -> fail("Interrupted replay must not apply history")));
+        assertTrue(failure.getMessage().contains("Interrupted"), failure.getMessage());
+        assertTrue(Thread.currentThread().isInterrupted());
+        assertEquals(correlationId, f.archive.lastCorrelationId(), "Interrupted replay must not query the catalogue");
+      } finally {
+        Thread.interrupted();
+      }
+      ArchiveRequestLog.replay(f.archive, r -> fail("History must remain empty"));
+    }
+  }
+
   private record Recorded(long id, long stop) {
   }
 

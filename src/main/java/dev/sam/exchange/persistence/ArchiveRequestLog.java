@@ -137,6 +137,7 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
   /** Stream recovery without materializing the recording as a list. */
   public static void replay(AeronArchive archive, Consumer<CommandRequest> recovery) {
     Objects.requireNonNull(recovery, "recovery");
+    checkInterrupted("request replay");
     Recording recording = findRecording(archive);
     if (recording != null)
       replay(archive, recording, recovery);
@@ -223,10 +224,14 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
     }
   }
 
-  private static void checkWait(AeronArchive archive, long deadline, String operation) {
-    archive.checkForErrorResponse();
+  private static void checkInterrupted(String operation) {
     if (Thread.currentThread().isInterrupted())
       throw new IllegalStateException("Interrupted waiting for " + operation);
+  }
+
+  private static void checkWait(AeronArchive archive, long deadline, String operation) {
+    archive.checkForErrorResponse();
+    checkInterrupted(operation);
     if (System.nanoTime() - deadline >= 0)
       throw new IllegalStateException("Timed out waiting for " + operation);
   }
