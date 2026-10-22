@@ -14,7 +14,7 @@ without a body. Other methods receive `405` with `Allow: GET, HEAD`. Paths are
 exact: query strings and trailing slashes are not alternative probe URLs.
 Requests must have no body and pass HTTP decoding. Health responses disable
 caching, and the server closes the HTTP connection after responding.
-Requests exceeding the existing 16 KiB HTTP aggregation limit may receive `413`
+Requests exceeding `--max-message-bytes` (16 KiB by default) may receive `413`
 before reaching the probe handler.
 
 The existing local browser Origin policy also applies to probes. Native clients
