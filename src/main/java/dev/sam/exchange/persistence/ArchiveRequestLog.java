@@ -180,10 +180,17 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
         "aeron:ipc", REPLAY_STREAM_ID)) {
       await(() -> replay.imageCount() > 0, archive, "request replay to connect");
       Image image = replay.imageAtIndex(0);
+      RuntimeException[] recoveryFailure = {null};
       ControlledFragmentAssembler assembler = new ControlledFragmentAssembler((buffer, offset, length, header) -> {
         if (Thread.currentThread().isInterrupted())
           return Action.ABORT;
-        recovery.accept(decoder.decode(buffer, offset, length));
+        try {
+          recovery.accept(decoder.decode(buffer, offset, length));
+        } catch (RuntimeException failure) {
+          // Image polling sends handler exceptions to the borrowed client's error handler, which may only log them.
+          recoveryFailure[0] = failure;
+          return Action.BREAK;
+        }
         return Thread.currentThread().isInterrupted() ? Action.BREAK : Action.CONTINUE;
       });
       SleepingIdleStrategy idle = new SleepingIdleStrategy();
@@ -191,6 +198,8 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
       while (image.position() < recording.stop()) {
         checkInterrupted("request replay progress");
         int fragments = image.controlledPoll(assembler, 10);
+        if (recoveryFailure[0] != null)
+          throw recoveryFailure[0];
         checkInterrupted("request replay progress");
         if (image.position() >= recording.stop())
           break;

@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
 import org.agrona.ExpandableArrayBuffer;
+import org.agrona.ErrorHandler;
 import org.agrona.concurrent.SleepingIdleStrategy;
 import org.agrona.concurrent.status.CountersReader;
 import org.junit.jupiter.api.Test;
@@ -22,6 +23,7 @@ import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.protocol.SbeRequestCodec;
 import dev.sam.exchange.transport.CommandRequest;
 import io.aeron.CommonContext;
+import io.aeron.Aeron;
 import io.aeron.ExclusivePublication;
 import io.aeron.archive.Archive;
 import io.aeron.archive.ArchivingMediaDriver;
@@ -137,6 +139,41 @@ class ArchiveRequestLogRecoveryTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({"false,1", "false,2", "true,1", "true,2"})
+  void callbackFailurePropagatesEvenWhenTheBorrowedClientLogsSubscriberErrors(boolean openWriter, int failAt,
+      @TempDir Path directory) {
+    List<Throwable> subscriberErrors = new ArrayList<>();
+    try (Fixture f = new Fixture(directory, subscriberErrors::add)) {
+      List<CommandRequest> history = List.of(request(1), request(2));
+      Recorded saved = record(f, "exchange-request-log", history.toArray(CommandRequest[]::new));
+      IllegalArgumentException cause = new IllegalArgumentException("Cannot apply recovered request");
+      List<CommandRequest> attempted = new ArrayList<>();
+      java.util.function.Consumer<CommandRequest> recovery = request -> {
+        attempted.add(request);
+        if (attempted.size() == failAt)
+          throw cause;
+      };
+      assertSame(cause, assertThrows(IllegalArgumentException.class, () -> {
+        if (openWriter) {
+          try (ArchiveRequestLog unexpected = ArchiveRequestLog.open(f.archive, recovery)) {
+            fail("Failed recovery opened recording " + unexpected.recordingId());
+          }
+        } else {
+          ArchiveRequestLog.replay(f.archive, recovery);
+        }
+      }));
+      assertEquals(history.subList(0, failAt), attempted, "No command after the failure may be applied");
+      assertEquals(saved.stop(), f.archive.getStopPosition(saved.id()));
+      assertTrue(subscriberErrors.isEmpty(), "Recovery failures belong to the caller, not the Aeron error handler");
+      List<CommandRequest> recovered = new ArrayList<>();
+      try (ArchiveRequestLog log = ArchiveRequestLog.open(f.archive, recovered::add)) {
+        assertEquals(saved.id(), log.recordingId());
+        assertEquals(history, recovered);
+      }
+    }
+  }
+
   private record Recorded(long id, long stop) {
   }
 
@@ -179,6 +216,9 @@ class ArchiveRequestLogRecoveryTest {
     private final ArchivingMediaDriver driver;
     private final AeronArchive archive;
     Fixture(Path directory) {
+      this(directory, null);
+    }
+    Fixture(Path directory, ErrorHandler subscriberErrorHandler) {
       driver = ArchivingMediaDriver.launch(
           new MediaDriver.Context().aeronDirectoryName(CommonContext.generateRandomDirName())
               .ipcTermBufferLength(64 * 1024).dirDeleteOnShutdown(true),
@@ -187,10 +227,15 @@ class ArchiveRequestLogRecoveryTest {
               .replicationChannel("aeron:udp?endpoint=localhost:0")
               .archiveClientContext(new AeronArchive.Context().controlResponseChannel("aeron:ipc")).fileSyncLevel(2)
               .catalogFileSyncLevel(2));
-      archive = AeronArchive.connect(new AeronArchive.Context()
+      AeronArchive.Context context = new AeronArchive.Context()
           .aeronDirectoryName(driver.mediaDriver().aeronDirectoryName()).controlRequestChannel("aeron:ipc")
           .controlRequestStreamId(driver.archive().context().localControlStreamId())
-          .controlResponseChannel("aeron:ipc"));
+          .controlResponseChannel("aeron:ipc");
+      if (subscriberErrorHandler != null) {
+        context.aeron(Aeron.connect(new Aeron.Context().aeronDirectoryName(driver.mediaDriver().aeronDirectoryName())
+            .subscriberErrorHandler(subscriberErrorHandler))).ownsAeronClient(true);
+      }
+      archive = AeronArchive.connect(context);
     }
     public void close() {
       archive.close();
