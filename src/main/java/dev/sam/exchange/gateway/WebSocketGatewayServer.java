@@ -27,6 +27,7 @@ public final class WebSocketGatewayServer {
             --queue-capacity=n   Maximum queued requests, positive integer (default: 128)
             --max-in-flight=n    Maximum active requests, positive integer (default: 8)
             --max-connections=n  Maximum accepted TCP connections (default: 128)
+            --max-pending-per-connection=n  Maximum pending requests per socket (default: 32)
             --aeron-directory=p  Existing engine Media Driver directory
                                  (default: java.io.tmpdir/exchange-lab-aeron)
             --timeout-ms=n       Timeout for each send and reply wait in milliseconds (default: 5000)
@@ -122,6 +123,7 @@ public final class WebSocketGatewayServer {
       boolean diagnostics = false;
       WebSocketLimits defaults = WebSocketLimits.defaults();
       int maxConnections = defaults.maxConnections();
+      int maxPendingPerConnection = defaults.maxPendingPerConnection();
       var seen = new HashSet<String>();
       for (String arg : args) {
         String[] parts = arg.split("=", 2);
@@ -132,6 +134,7 @@ public final class WebSocketGatewayServer {
           case "--queue-capacity" -> queueCapacity = integerValue(parts);
           case "--max-in-flight" -> maxInFlight = integerValue(parts);
           case "--max-connections" -> maxConnections = positiveIntegerValue(parts);
+          case "--max-pending-per-connection" -> maxPendingPerConnection = positiveIntegerValue(parts);
           case "--aeron-directory" -> aeronDirectory = argumentValue(parts);
           case "--timeout-ms" -> timeout = timeoutValue(parts);
           case "--diagnostics" -> {
@@ -148,8 +151,7 @@ public final class WebSocketGatewayServer {
         }
       }
       return new Config(port, queueCapacity, maxInFlight, aeronDirectory, new ClientConfig(timeout, maxAttempts),
-          diagnostics,
-          new WebSocketLimits(maxConnections, defaults.maxPendingPerConnection(), defaults.maxMessageBytes(),
+          diagnostics, new WebSocketLimits(maxConnections, maxPendingPerConnection, defaults.maxMessageBytes(),
               defaults.maxResponseBytes(), defaults.readIdleTimeoutMillis(), defaults.handshakeTimeoutMillis()));
     }
 

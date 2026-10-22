@@ -38,12 +38,14 @@ class WebSocketGatewayLimitsServerTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"0", "-1", "2147483648", "bad", ""})
-  void invalidConnectionLimitsFailBeforeConnecting(String value) {
-    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-        () -> WebSocketGatewayServer.main(new String[]{"--max-connections=" + value}));
-    assertTrue(error.getMessage().contains("--max-connections"));
-    assertFalse(error.getMessage().startsWith("Unknown"), "The option must be recognized and validated");
+  @ValueSource(strings = {"--max-connections", "--max-pending-per-connection"})
+  void invalidIntegerLimitsFailBeforeConnecting(String flag) {
+    for (String value : List.of("0", "-1", "2147483648", "bad", "")) {
+      IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+          () -> WebSocketGatewayServer.main(new String[]{flag + "=" + value}));
+      assertTrue(error.getMessage().contains(flag));
+      assertFalse(error.getMessage().startsWith("Unknown"), "The option must be recognized and validated");
+    }
   }
 
   @Test
@@ -52,6 +54,19 @@ class WebSocketGatewayLimitsServerTest {
         () -> WebSocketGatewayServer.Config.parse(new String[]{"--max-connections"}));
     assertThrows(IllegalArgumentException.class,
         () -> WebSocketGatewayServer.Config.parse(new String[]{"--max-connections=1", "--max-connections=2"}));
+  }
+
+  @Test
+  void pendingLimitRejectsTheSecondRequestWithoutClaimingItExecuted() throws Exception {
+    try (Fixture fixture = new Fixture("--max-pending-per-connection=1", "--timeout-ms=5000", "--max-attempts=1");
+        WebSocketTestClient client = new WebSocketTestClient(fixture.port)) {
+      client.socket.sendText(WebSocketOrderHandlerTest.cancel(1), true).get(3, TimeUnit.SECONDS);
+      client.socket.sendText(WebSocketOrderHandlerTest.cancel(2), true).get(3, TimeUnit.SECONDS);
+      var response = client.response();
+      assertEquals(WebSocketOrderHandlerTest.id(2), response.get("requestId").getAsString());
+      assertEquals("RESOURCE_EXHAUSTED", response.getAsJsonObject("error").get("code").getAsString());
+      assertFalse(response.getAsJsonObject("error").get("outcomeUnknown").getAsBoolean());
+    }
   }
 
   private final class Fixture implements AutoCloseable {
