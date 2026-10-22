@@ -74,6 +74,30 @@ class ArchiveRequestLogRecoveryTest {
     }
   }
 
+  @Test
+  void rejectsInterruptedOpenBeforeCreatingAnyRecording(@TempDir Path directory) {
+    try (Fixture f = new Fixture(directory)) {
+      long correlationId = f.archive.lastCorrelationId();
+      Thread.currentThread().interrupt();
+      try {
+        assertThrows(IllegalStateException.class, () -> {
+          try (ArchiveRequestLog unexpected = ArchiveRequestLog.open(f.archive, r -> fail("No recovery expected"))) {
+            fail("Interrupted open created recording " + unexpected.recordingId());
+          }
+        });
+        assertTrue(Thread.currentThread().isInterrupted());
+        assertEquals(correlationId, f.archive.lastCorrelationId(), "Interrupted open must not query the catalogue");
+      } finally {
+        Thread.interrupted();
+      }
+      assertEquals(0, f.archive.listRecordings(0, 10, (a, b, c, d, e, g, h, i, j, k, l, m, n, o, p, q) -> {
+      }));
+      try (ArchiveRequestLog log = ArchiveRequestLog.open(f.archive, r -> fail("History must remain empty"))) {
+        assertTrue(log.recordingId() >= 0);
+      }
+    }
+  }
+
   private record Recorded(long id, long stop) {
   }
 

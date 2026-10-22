@@ -60,6 +60,7 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
   /** Replay before opening the writer, so no new request can overtake recovery. */
   public static ArchiveRequestLog open(AeronArchive archive, Consumer<CommandRequest> recovery) {
     Objects.requireNonNull(recovery, "recovery");
+    checkInterrupted("request log open");
     Recording recording = findRecording(archive);
     if (recording != null)
       replay(archive, recording, recovery);
