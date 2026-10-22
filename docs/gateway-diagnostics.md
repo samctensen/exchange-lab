@@ -59,3 +59,6 @@ the flag held constant or disabled.
 
 [Health probes](gateway-health.md) describe current availability; these counters
 explain what happened over the gateway's lifetime.
+
+For live scraping, use [Prometheus metrics](gateway-metrics.md). `--metrics` and
+`--diagnostics` are independent output options backed by the same collector.
