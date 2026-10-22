@@ -184,8 +184,17 @@ public final class ArchiveRequestLog implements RequestLog, AutoCloseable {
       ControlledFragmentAssembler assembler = new ControlledFragmentAssembler((buffer, offset, length, header) -> {
         if (Thread.currentThread().isInterrupted())
           return Action.ABORT;
+        CommandRequest request;
         try {
-          recovery.accept(decoder.decode(buffer, offset, length));
+          request = decoder.decode(buffer, offset, length);
+        } catch (RuntimeException failure) {
+          recoveryFailure[0] = new IllegalStateException(
+              "Invalid request in recording " + recording.id() + " at frame end position " + header.position(),
+              failure);
+          return Action.BREAK;
+        }
+        try {
+          recovery.accept(request);
         } catch (RuntimeException failure) {
           // Image polling sends handler exceptions to the borrowed client's error handler, which may only log them.
           recoveryFailure[0] = failure;

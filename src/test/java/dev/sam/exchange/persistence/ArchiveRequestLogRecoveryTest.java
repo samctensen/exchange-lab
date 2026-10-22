@@ -3,6 +3,7 @@ package dev.sam.exchange.persistence;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -174,6 +175,37 @@ class ArchiveRequestLogRecoveryTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({"false", "true"})
+  void malformedHistoryReportsItsRecordingAndFramePositionBeforeOpeningAWriter(boolean openWriter,
+      @TempDir Path directory) {
+    List<Throwable> subscriberErrors = new ArrayList<>();
+    try (Fixture f = new Fixture(directory, subscriberErrors::add)) {
+      String privatePayload = "private-order-payload";
+      Recorded saved = recordFrames(f, "exchange-request-log", encoded(request(1)),
+          privatePayload.getBytes(StandardCharsets.US_ASCII));
+      for (int attempt = 0; attempt < 2; attempt++) {
+        List<CommandRequest> recovered = new ArrayList<>();
+        IllegalStateException failure = assertThrows(IllegalStateException.class, () -> {
+          if (openWriter) {
+            try (ArchiveRequestLog unexpected = ArchiveRequestLog.open(f.archive, recovered::add)) {
+              fail("Malformed history opened recording " + unexpected.recordingId());
+            }
+          } else {
+            ArchiveRequestLog.replay(f.archive, recovered::add);
+          }
+        });
+        assertTrue(failure.getMessage().contains("recording " + saved.id()), failure.getMessage());
+        assertTrue(failure.getMessage().contains("position " + saved.stop()), failure.getMessage());
+        assertInstanceOf(IllegalArgumentException.class, failure.getCause());
+        assertFalse((failure.toString() + failure.getCause()).contains(privatePayload));
+        assertEquals(List.of(request(1)), recovered);
+        assertEquals(saved.stop(), f.archive.getStopPosition(saved.id()), "Malformed history must remain stopped");
+      }
+      assertTrue(subscriberErrors.isEmpty());
+    }
+  }
+
   private record Recorded(long id, long stop) {
   }
 
@@ -181,7 +213,22 @@ class ArchiveRequestLogRecoveryTest {
     return new CommandRequest(new UUID(0, id), new CancelOrder(id));
   }
 
+  private static byte[] encoded(CommandRequest request) {
+    ExpandableArrayBuffer buffer = new ExpandableArrayBuffer();
+    int length = new SbeRequestCodec().encode(request, buffer, 0);
+    byte[] bytes = new byte[length];
+    buffer.getBytes(0, bytes);
+    return bytes;
+  }
+
   private static Recorded record(Fixture f, String alias, CommandRequest... requests) {
+    byte[][] frames = new byte[requests.length][];
+    for (int i = 0; i < requests.length; i++)
+      frames[i] = encoded(requests[i]);
+    return recordFrames(f, alias, frames);
+  }
+
+  private static Recorded recordFrames(Fixture f, String alias, byte[]... frames) {
     try (ExclusivePublication publication = f.archive.addRecordedExclusivePublication("aeron:ipc?alias=" + alias,
         2001)) {
       CountersReader counters = f.archive.context().aeron().countersReader();
@@ -191,10 +238,9 @@ class ArchiveRequestLogRecoveryTest {
       long recordingId = RecordingPos.getRecordingId(counters, counterId);
       long[] position = {publication.position()};
       ExpandableArrayBuffer buffer = new ExpandableArrayBuffer();
-      SbeRequestCodec codec = new SbeRequestCodec();
-      for (CommandRequest request : requests) {
-        int length = codec.encode(request, buffer, 0);
-        await(() -> (position[0] = publication.offer(buffer, 0, length)) >= 0);
+      for (byte[] frame : frames) {
+        buffer.putBytes(0, frame);
+        await(() -> (position[0] = publication.offer(buffer, 0, frame.length)) >= 0);
       }
       await(() -> counters.getCounterValue(counterId) >= position[0]);
       f.archive.tryStopRecordingByIdentity(recordingId);
