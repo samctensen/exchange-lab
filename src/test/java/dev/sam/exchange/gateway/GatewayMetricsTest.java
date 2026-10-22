@@ -38,6 +38,26 @@ class GatewayMetricsTest {
       exchange_gateway_unmatched_responses_total 17
       """;
 
+  private static final String TRANSPORT = """
+      # HELP exchange_gateway_offers_total Successful engine publication offers, including retries.
+      # TYPE exchange_gateway_offers_total counter
+      exchange_gateway_offers_total 107
+      # HELP exchange_gateway_retries_total Successful engine publication offers after the first attempt.
+      # TYPE exchange_gateway_retries_total counter
+      exchange_gateway_retries_total 29
+      # HELP exchange_gateway_offer_timeouts_total Attempts that timed out before a successful publication offer.
+      # TYPE exchange_gateway_offer_timeouts_total counter
+      exchange_gateway_offer_timeouts_total 31
+      # HELP exchange_gateway_reply_timeouts_total Attempts that timed out while awaiting an engine reply.
+      # TYPE exchange_gateway_reply_timeouts_total counter
+      exchange_gateway_reply_timeouts_total 37
+      """;
+
+  @Test
+  void distinguishesOffersRetriesAndEachTimeoutStage() {
+    assertTrue(GatewayMetrics.render(SNAPSHOT, true).contains(TRANSPORT));
+  }
+
   @Test
   void exposesTerminalOutcomesWithoutConflatingBusinessRejectionsWithFailures() {
     assertTrue(GatewayMetrics.render(SNAPSHOT, true).contains(OUTCOMES));

@@ -24,6 +24,14 @@ final class GatewayMetrics {
         snapshot.failed());
     sample(text, "unmatched_responses_total", "Engine responses without a matching active request.", "counter",
         snapshot.unmatchedResponses());
+    sample(text, "offers_total", "Successful engine publication offers, including retries.", "counter",
+        snapshot.offers());
+    sample(text, "retries_total", "Successful engine publication offers after the first attempt.", "counter",
+        snapshot.retries());
+    sample(text, "offer_timeouts_total", "Attempts that timed out before a successful publication offer.", "counter",
+        snapshot.offerTimeouts());
+    sample(text, "reply_timeouts_total", "Attempts that timed out while awaiting an engine reply.", "counter",
+        snapshot.replyTimeouts());
     return text.toString();
   }
 
