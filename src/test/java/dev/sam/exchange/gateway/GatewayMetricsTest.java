@@ -23,8 +23,28 @@ class GatewayMetricsTest {
       exchange_gateway_activated_total 98
       """;
 
+  private static final String OUTCOMES = """
+      # HELP exchange_gateway_completed_total Requests completed with a definitive engine result, including business rejections.
+      # TYPE exchange_gateway_completed_total counter
+      exchange_gateway_completed_total 85
+      # HELP exchange_gateway_business_rejected_total Completed requests rejected by the engine's business rules.
+      # TYPE exchange_gateway_business_rejected_total counter
+      exchange_gateway_business_rejected_total 11
+      # HELP exchange_gateway_failed_total Accepted requests ending in a terminal processing failure.
+      # TYPE exchange_gateway_failed_total counter
+      exchange_gateway_failed_total 13
+      # HELP exchange_gateway_unmatched_responses_total Engine responses without a matching active request.
+      # TYPE exchange_gateway_unmatched_responses_total counter
+      exchange_gateway_unmatched_responses_total 17
+      """;
+
+  @Test
+  void exposesTerminalOutcomesWithoutConflatingBusinessRejectionsWithFailures() {
+    assertTrue(GatewayMetrics.render(SNAPSHOT, true).contains(OUTCOMES));
+  }
+
   @Test
   void exposesAdmissionCountsWithPrometheusMetadata() {
-    assertEquals(ADMISSION, GatewayMetrics.render(SNAPSHOT, true));
+    assertTrue(GatewayMetrics.render(SNAPSHOT, true).startsWith(ADMISSION));
   }
 }

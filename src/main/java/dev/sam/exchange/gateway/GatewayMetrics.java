@@ -15,6 +15,15 @@ final class GatewayMetrics {
     sample(text, "not_running_total", "Requests rejected because the gateway was not running.", "counter",
         snapshot.notRunning());
     sample(text, "activated_total", "Queued requests activated for processing.", "counter", snapshot.activated());
+    sample(text, "completed_total",
+        "Requests completed with a definitive engine result, including business rejections.", "counter",
+        snapshot.completed());
+    sample(text, "business_rejected_total", "Completed requests rejected by the engine's business rules.", "counter",
+        snapshot.businessRejected());
+    sample(text, "failed_total", "Accepted requests ending in a terminal processing failure.", "counter",
+        snapshot.failed());
+    sample(text, "unmatched_responses_total", "Engine responses without a matching active request.", "counter",
+        snapshot.unmatchedResponses());
     return text.toString();
   }
 
