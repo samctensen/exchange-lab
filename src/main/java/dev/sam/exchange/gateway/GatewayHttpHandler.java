@@ -38,14 +38,15 @@ final class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpReque
     boolean readiness = request.uri().equals("/health/ready");
     boolean health = live || readiness;
     boolean scrape = metrics != null && request.uri().equals("/metrics");
+    boolean probe = health || scrape;
     HttpResponseStatus failure = null;
     if (!request.decoderResult().isSuccess())
       failure = HttpResponseStatus.BAD_REQUEST;
-    else if (!health && !scrape && !request.uri().equals("/orders"))
+    else if (!probe && !request.uri().equals("/orders"))
       failure = HttpResponseStatus.NOT_FOUND;
-    else if (!request.method().equals(HttpMethod.GET) && !(health && request.method().equals(HttpMethod.HEAD)))
+    else if (!request.method().equals(HttpMethod.GET) && !(probe && request.method().equals(HttpMethod.HEAD)))
       failure = HttpResponseStatus.METHOD_NOT_ALLOWED;
-    else if (health && request.content().isReadable())
+    else if (probe && request.content().isReadable())
       failure = HttpResponseStatus.BAD_REQUEST;
     else if (request.headers().getAll(HttpHeaderNames.ORIGIN).size() > 1
         || !allowedOrigin(request.headers().get(HttpHeaderNames.ORIGIN)))
@@ -54,15 +55,15 @@ final class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpReque
       var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, failure);
       response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0).set(HttpHeaderNames.CONNECTION,
           HttpHeaderValues.CLOSE);
-      if (health)
+      if (probe)
         response.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-store");
       if (failure.equals(HttpResponseStatus.METHOD_NOT_ALLOWED))
-        response.headers().set(HttpHeaderNames.ALLOW, health ? "GET, HEAD" : HttpMethod.GET.name());
+        response.headers().set(HttpHeaderNames.ALLOW, probe ? "GET, HEAD" : HttpMethod.GET.name());
       ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
     } else if (scrape) {
       byte[] body = metrics.get().getBytes(StandardCharsets.UTF_8);
       var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
-          Unpooled.wrappedBuffer(body));
+          request.method().equals(HttpMethod.HEAD) ? Unpooled.EMPTY_BUFFER : Unpooled.wrappedBuffer(body));
       response.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-store")
           .set(HttpHeaderNames.CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")
           .setInt(HttpHeaderNames.CONTENT_LENGTH, body.length).set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
