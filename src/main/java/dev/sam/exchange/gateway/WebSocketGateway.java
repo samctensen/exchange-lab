@@ -84,7 +84,7 @@ public final class WebSocketGateway implements AutoCloseable {
                   .websocketPath("/orders").maxFramePayloadLength(MAX_MESSAGE_BYTES).allowExtensions(false)
                   .handshakeTimeoutMillis(5000).build()));
               pipeline.addLast(new WebSocketFrameAggregator(MAX_MESSAGE_BYTES));
-              pipeline.addLast(new WebSocketOrderHandler(gateway::submit, 32));
+              pipeline.addLast(new WebSocketOrderHandler(gateway::submit, limits.maxPendingPerConnection()));
             }
           }).bind(new InetSocketAddress("127.0.0.1", requestedPort)).sync().channel();
     } catch (Exception failure) {
