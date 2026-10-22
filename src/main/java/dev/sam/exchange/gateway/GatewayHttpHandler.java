@@ -61,7 +61,16 @@ final class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpReque
         response.headers().set(HttpHeaderNames.ALLOW, probe ? "GET, HEAD" : HttpMethod.GET.name());
       ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
     } else if (scrape) {
-      byte[] body = metrics.get().getBytes(StandardCharsets.UTF_8);
+      byte[] body;
+      try {
+        body = metrics.get().getBytes(StandardCharsets.UTF_8);
+      } catch (RuntimeException unavailable) {
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.SERVICE_UNAVAILABLE);
+        response.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-store").setInt(HttpHeaderNames.CONTENT_LENGTH, 0)
+            .set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
+        ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+        return;
+      }
       var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
           request.method().equals(HttpMethod.HEAD) ? Unpooled.EMPTY_BUFFER : Unpooled.wrappedBuffer(body));
       response.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-store")

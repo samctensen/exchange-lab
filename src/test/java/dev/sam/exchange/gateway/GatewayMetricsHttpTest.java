@@ -3,6 +3,8 @@ package dev.sam.exchange.gateway;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -158,6 +160,74 @@ class GatewayMetricsHttpTest {
       assertNull(channel.readInbound(), "Rejected metrics requests must never reach the order handler");
       assertFalse(channel.isActive());
       assertEquals(0, request.refCnt());
+    } finally {
+      channel.finishAndReleaseAll();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"GET", "HEAD"})
+  void rendererFailureReturnsEmptyUnavailableResponse(String method) {
+    FullHttpResponse response = request(HttpMethod.valueOf(method), "/metrics", () -> {
+      throw new IllegalStateException("Private renderer failure details");
+    });
+    try {
+      assertEquals(503, response.status().code());
+      assertEquals("0", response.headers().get(HttpHeaderNames.CONTENT_LENGTH));
+      assertEquals("no-store", response.headers().get(HttpHeaderNames.CACHE_CONTROL));
+      assertEquals("close", response.headers().get(HttpHeaderNames.CONNECTION));
+      assertEquals(0, response.content().readableBytes());
+    } finally {
+      response.release();
+    }
+  }
+
+  @Test
+  void aLaterScrapeCanSucceedAfterATransientRendererFailure() {
+    var first = new AtomicBoolean(true);
+    Supplier<String> metrics = () -> {
+      if (first.getAndSet(false))
+        throw new IllegalStateException("Transient failure");
+      return METRICS;
+    };
+    FullHttpResponse failed = request(HttpMethod.GET, "/metrics", metrics);
+    try {
+      assertEquals(503, failed.status().code());
+    } finally {
+      failed.release();
+    }
+    FullHttpResponse recovered = request(HttpMethod.GET, "/metrics", metrics);
+    try {
+      assertEquals(200, recovered.status().code());
+      assertEquals(METRICS, recovered.content().toString(StandardCharsets.UTF_8));
+    } finally {
+      recovered.release();
+    }
+  }
+
+  @Test
+  void livenessDoesNotDependOnMetricsRendering() {
+    FullHttpResponse response = request(HttpMethod.GET, "/health/live", () -> {
+      throw new AssertionError("Liveness must never invoke the metrics renderer");
+    });
+    try {
+      assertEquals(200, response.status().code());
+      assertEquals("{\"status\":\"live\"}", response.content().toString(StandardCharsets.UTF_8));
+      assertEquals("17", response.headers().get(HttpHeaderNames.CONTENT_LENGTH));
+    } finally {
+      response.release();
+    }
+  }
+
+  private static FullHttpResponse request(HttpMethod method, String path, Supplier<String> metrics) {
+    var channel = new EmbeddedChannel(new GatewayHttpHandler(() -> false, metrics));
+    try {
+      assertDoesNotThrow(() -> channel.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, method, path)));
+      FullHttpResponse response = channel.readOutbound();
+      assertNotNull(response);
+      assertNull(channel.readInbound());
+      assertFalse(channel.isActive());
+      return response;
     } finally {
       channel.finishAndReleaseAll();
     }
