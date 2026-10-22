@@ -89,6 +89,26 @@ class WebSocketGatewayLimitsServerTest {
     }
   }
 
+  @Test
+  void configuredReadIdleTimeoutExpiresAnUnupgradedConnection() throws Exception {
+    try (Fixture fixture = new Fixture("--read-idle-timeout-ms=100");
+        Socket idle = new Socket("127.0.0.1", fixture.port)) {
+      idle.setSoTimeout(3000);
+      assertEquals(-1, idle.getInputStream().read());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"--read-idle-timeout-ms"})
+  void timeoutLimitsRejectInvalidOrOverflowingMillisecondsBeforeConnecting(String flag) {
+    for (String value : List.of("0", "-1", "9223372036855", "9223372036854775808", "bad", "")) {
+      var failure = assertThrows(IllegalArgumentException.class,
+          () -> WebSocketGatewayServer.main(new String[]{flag + "=" + value}));
+      assertTrue(failure.getMessage().contains(flag));
+      assertFalse(failure.getMessage().startsWith("Unknown"));
+    }
+  }
+
   private final class Fixture implements AutoCloseable {
     final MediaDriver driver;
     final Process process;

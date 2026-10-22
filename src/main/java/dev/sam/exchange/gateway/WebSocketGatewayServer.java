@@ -30,6 +30,7 @@ public final class WebSocketGatewayServer {
             --max-pending-per-connection=n  Maximum pending requests per socket (default: 32)
             --max-message-bytes=n  Maximum inbound message/HTTP body bytes (default: 16384)
             --max-response-bytes=n  Maximum JSON response bytes (default: 1048576)
+            --read-idle-timeout-ms=n  Close connections without reads (default: 60000)
             --aeron-directory=p  Existing engine Media Driver directory
                                  (default: java.io.tmpdir/exchange-lab-aeron)
             --timeout-ms=n       Timeout for each send and reply wait in milliseconds (default: 5000)
@@ -128,6 +129,7 @@ public final class WebSocketGatewayServer {
       int maxPendingPerConnection = defaults.maxPendingPerConnection();
       int maxMessageBytes = defaults.maxMessageBytes();
       int maxResponseBytes = defaults.maxResponseBytes();
+      long readIdleTimeoutMillis = defaults.readIdleTimeoutMillis();
       var seen = new HashSet<String>();
       for (String arg : args) {
         String[] parts = arg.split("=", 2);
@@ -141,8 +143,9 @@ public final class WebSocketGatewayServer {
           case "--max-pending-per-connection" -> maxPendingPerConnection = positiveIntegerValue(parts);
           case "--max-message-bytes" -> maxMessageBytes = positiveIntegerValue(parts);
           case "--max-response-bytes" -> maxResponseBytes = positiveIntegerValue(parts);
+          case "--read-idle-timeout-ms" -> readIdleTimeoutMillis = millisecondValue(parts);
           case "--aeron-directory" -> aeronDirectory = argumentValue(parts);
-          case "--timeout-ms" -> timeout = timeoutValue(parts);
+          case "--timeout-ms" -> timeout = Duration.ofMillis(millisecondValue(parts));
           case "--diagnostics" -> {
             if (parts.length != 1)
               throw new IllegalArgumentException("--diagnostics does not take a value");
@@ -158,20 +161,20 @@ public final class WebSocketGatewayServer {
       }
       return new Config(port, queueCapacity, maxInFlight, aeronDirectory, new ClientConfig(timeout, maxAttempts),
           diagnostics, new WebSocketLimits(maxConnections, maxPendingPerConnection, maxMessageBytes, maxResponseBytes,
-              defaults.readIdleTimeoutMillis(), defaults.handshakeTimeoutMillis()));
+              readIdleTimeoutMillis, defaults.handshakeTimeoutMillis()));
     }
 
-    private static Duration timeoutValue(String[] parts) {
+    private static long millisecondValue(String[] parts) {
       String value = argumentValue(parts);
       long milliseconds;
       try {
         milliseconds = Long.parseLong(value);
       } catch (NumberFormatException error) {
-        throw new IllegalArgumentException("--timeout-ms must be a 64-bit integer: " + value, error);
+        throw new IllegalArgumentException(parts[0] + " must be a 64-bit integer: " + value, error);
       }
       if (milliseconds < 1 || milliseconds > Long.MAX_VALUE / 1_000_000)
-        throw new IllegalArgumentException("--timeout-ms must be positive and representable in nanoseconds");
-      return Duration.ofMillis(milliseconds);
+        throw new IllegalArgumentException(parts[0] + " must be positive and representable in nanoseconds");
+      return milliseconds;
     }
 
     private static int integerValue(String[] parts) {
