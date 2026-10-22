@@ -11,6 +11,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
+import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.WriteBufferWaterMark;
@@ -74,16 +75,7 @@ public final class WebSocketGateway implements AutoCloseable {
               }
               clients.add(channel);
               channel.closeFuture().addListener(ignored -> connectionCount.decrementAndGet());
-              var pipeline = channel.pipeline();
-              pipeline.addLast(new IdleStateHandler(limits.readIdleTimeoutMillis(), 0, 0, TimeUnit.MILLISECONDS));
-              pipeline.addLast(new HttpServerCodec());
-              pipeline.addLast(new HttpObjectAggregator(limits.maxMessageBytes()));
-              pipeline.addLast(new GatewayHttpHandler(gateway::isReady));
-              pipeline.addLast(new WebSocketServerProtocolHandler(WebSocketServerProtocolConfig.newBuilder()
-                  .websocketPath("/orders").maxFramePayloadLength(limits.maxMessageBytes()).allowExtensions(false)
-                  .handshakeTimeoutMillis(5000).build()));
-              pipeline.addLast(new WebSocketFrameAggregator(limits.maxMessageBytes()));
-              pipeline.addLast(new WebSocketOrderHandler(gateway::submit, limits));
+              configurePipeline(channel.pipeline());
             }
           }).bind(new InetSocketAddress("127.0.0.1", requestedPort)).sync().channel();
     } catch (Exception failure) {
@@ -94,6 +86,18 @@ public final class WebSocketGateway implements AutoCloseable {
         throw io;
       throw new IOException("Could not start WebSocket gateway", failure);
     }
+  }
+
+  void configurePipeline(ChannelPipeline pipeline) {
+    pipeline.addLast(new IdleStateHandler(limits.readIdleTimeoutMillis(), 0, 0, TimeUnit.MILLISECONDS));
+    pipeline.addLast(new HttpServerCodec());
+    pipeline.addLast(new HttpObjectAggregator(limits.maxMessageBytes()));
+    pipeline.addLast(new GatewayHttpHandler(gateway::isReady));
+    pipeline.addLast(new WebSocketServerProtocolHandler(WebSocketServerProtocolConfig.newBuilder()
+        .websocketPath("/orders").maxFramePayloadLength(limits.maxMessageBytes()).allowExtensions(false)
+        .handshakeTimeoutMillis(limits.handshakeTimeoutMillis()).build()));
+    pipeline.addLast(new WebSocketFrameAggregator(limits.maxMessageBytes()));
+    pipeline.addLast(new WebSocketOrderHandler(gateway::submit, limits));
   }
 
   public int port() {
