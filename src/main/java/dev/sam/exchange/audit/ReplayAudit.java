@@ -6,6 +6,8 @@ import java.util.function.Consumer;
 
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.PlaceOrder;
+import dev.sam.exchange.engine.PlaceResult;
+import dev.sam.exchange.engine.Trade;
 import dev.sam.exchange.engine.RejectReason;
 import dev.sam.exchange.engine.RejectResult;
 import dev.sam.exchange.transport.CommandRequest;
@@ -21,6 +23,9 @@ public final class ReplayAudit implements Consumer<CommandRequest> {
   private long placeRequests;
   private long cancelRequests;
   private long businessRejections;
+  private long trades;
+  private BigInteger executedLots = BigInteger.ZERO;
+  private BigInteger notionalTickLots = BigInteger.ZERO;
 
   public ReplayAudit(RequestStateMachine state) {
     this.state = Objects.requireNonNull(state, "state must not be null");
@@ -48,10 +53,18 @@ public final class ReplayAudit implements Consumer<CommandRequest> {
     if (response.result() instanceof RejectResult) {
       businessRejections++;
     }
+    if (response.result() instanceof PlaceResult place) {
+      for (Trade trade : place.trades()) {
+        trades++;
+        BigInteger lots = BigInteger.valueOf(trade.quantityLots());
+        executedLots = executedLots.add(lots);
+        notionalTickLots = notionalTickLots.add(lots.multiply(BigInteger.valueOf(trade.priceTicks())));
+      }
+    }
   }
 
   public ReplayAuditSnapshot snapshot() {
     return new ReplayAuditSnapshot(observedRequests, uniqueRequests, duplicateRequests, conflictingRequests,
-        placeRequests, cancelRequests, businessRejections, 0L, BigInteger.ZERO, BigInteger.ZERO, "");
+        placeRequests, cancelRequests, businessRejections, trades, executedLots, notionalTickLots, "");
   }
 }

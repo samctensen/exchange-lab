@@ -101,6 +101,48 @@ class ReplayAuditTest {
     assertEquals(List.of(new OrderSnapshot(replacement, 8L)), book.snapshot());
   }
 
+  @Test
+  void countsOnlyFreshTradesAtTheirRestingPricesAcrossMultipleLevels() {
+    CommandRequest bid = request(3L, new PlaceOrder(30L, Side.BID, 105L, 4L));
+    CommandRequest ask = request(5L, new PlaceOrder(50L, Side.ASK, 98L, 2L));
+    audit.accept(request(1L, new PlaceOrder(10L, Side.ASK, 100L, 2L)));
+    audit.accept(request(2L, new PlaceOrder(20L, Side.ASK, 102L, 3L)));
+    audit.accept(bid);
+    audit.accept(request(4L, new PlaceOrder(40L, Side.BID, 99L, 6L)));
+    audit.accept(ask);
+    audit.accept(bid);
+    audit.accept(ask);
+    audit.accept(request(6L, new PlaceOrder(20L, Side.BID, 200L, 5L)));
+    audit.accept(request(3L, new PlaceOrder(30L, Side.BID, 106L, 4L)));
+
+    ReplayAuditSnapshot snapshot = audit.snapshot();
+    assertEquals(9L, snapshot.observedRequests());
+    assertEquals(6L, snapshot.uniqueRequests());
+    assertEquals(2L, snapshot.duplicateRequests());
+    assertEquals(1L, snapshot.conflictingRequests());
+    assertEquals(1L, snapshot.businessRejections());
+    // Two lots at 100, two at 102 and two at 99: 3 trades, 6 lots, 602 tick-lots.
+    assertEquals(3L, snapshot.trades());
+    assertEquals(new BigInteger("6"), snapshot.executedLots());
+    assertEquals(new BigInteger("602"), snapshot.notionalTickLots());
+    assertEquals(1L, book.remainingLots(20L).orElseThrow());
+    assertEquals(4L, book.remainingLots(40L).orElseThrow());
+  }
+
+  @Test
+  void preservesExactVolumeAndNotionalBeyondLongRange() {
+    audit.accept(request(1L, new PlaceOrder(10L, Side.ASK, Long.MAX_VALUE, Long.MAX_VALUE)));
+    audit.accept(request(2L, new PlaceOrder(20L, Side.BID, Long.MAX_VALUE, Long.MAX_VALUE)));
+    audit.accept(request(3L, new PlaceOrder(30L, Side.ASK, Long.MAX_VALUE, Long.MAX_VALUE)));
+    audit.accept(request(4L, new PlaceOrder(40L, Side.BID, Long.MAX_VALUE, Long.MAX_VALUE)));
+
+    ReplayAuditSnapshot snapshot = audit.snapshot();
+    assertEquals(2L, snapshot.trades());
+    assertEquals(new BigInteger("18446744073709551614"), snapshot.executedLots());
+    assertEquals(new BigInteger("170141183460469231694793815568465002498"), snapshot.notionalTickLots());
+    assertEquals(List.of(), book.snapshot());
+  }
+
   private static CommandRequest request(long id, EngineCommand command) {
     return new CommandRequest(new UUID(0L, id), command);
   }
