@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 
 import org.junit.jupiter.api.Test;
+import com.google.gson.JsonParser;
 
 import dev.sam.exchange.engine.BookDepth;
 import dev.sam.exchange.engine.BookSummary;
@@ -75,5 +76,32 @@ class ArchiveInspectionReportTest {
     assertThrows(NullPointerException.class, () -> new ArchiveInspection(null, f.book(), f.depth()));
     assertThrows(NullPointerException.class, () -> new ArchiveInspection(f.audit(), null, f.depth()));
     assertThrows(NullPointerException.class, () -> new ArchiveInspection(f.audit(), f.book(), null));
+  }
+
+  @Test
+  void jsonUsesAVersionedShapeAndExactDecimalStringsForWideNumbers() {
+    var f = fixture();
+    var largePrice = new ArchiveInspection(f.audit(), f.book(), new BookDepth(
+        List.of(new PriceLevelSnapshot(Long.MAX_VALUE, 2, new BigInteger("18446744073709551614"))), List.of()));
+    String report = ArchiveInspectionReport.json(largePrice);
+    assertEquals(JsonParser.parseString("""
+        {"formatVersion":1,"historyDigest":{"algorithm":"sha256-chain-sbe-v1","value":"%s"},
+        "requests":{"observed":"10","unique":"7","duplicates":"2","conflicts":"1",
+          "placements":"5","cancellations":"2","businessRejections":"1"},
+        "trades":{"count":"3","quantityLots":"18446744073709551614",
+          "notionalTickLots":"170141183460469231694793815568465002498"},
+        "book":{"bidOrders":3,"askOrders":4,"bidLevels":2,"askLevels":2,
+          "bidLots":"18446744073709551615","askLots":"40"},
+        "depth":{"bids":[{"priceTicks":"9223372036854775807","orderCount":2,
+          "quantityLots":"18446744073709551614"}],"asks":[]}}
+        """.formatted(HASH)), JsonParser.parseString(report));
+    assertTrue(report.endsWith("\n"));
+    Locale original = Locale.getDefault();
+    try {
+      Locale.setDefault(Locale.GERMANY);
+      assertEquals(report, ArchiveInspectionReport.json(largePrice));
+    } finally {
+      Locale.setDefault(original);
+    }
   }
 }
