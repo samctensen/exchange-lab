@@ -162,6 +162,28 @@ class ReplayAuditTest {
     assertEquals(List.of(), book.snapshot());
   }
 
+  @Test
+  void snapshotsRemainDetachedWhileLaterRequestsChangeTheAuditAndBook() {
+    audit.accept(request(1L, new PlaceOrder(10L, Side.ASK, 100L, 5L)));
+    audit.accept(request(2L, new PlaceOrder(20L, Side.BID, 101L, 2L)));
+    ReplayAuditSnapshot first = audit.snapshot();
+    assertEquals(first, audit.snapshot());
+
+    audit.accept(request(3L, new PlaceOrder(30L, Side.BID, 101L, 1L)));
+    ReplayAuditSnapshot later = audit.snapshot();
+
+    assertEquals(2L, first.observedRequests());
+    assertEquals(1L, first.trades());
+    assertEquals(new BigInteger("2"), first.executedLots());
+    assertEquals(new BigInteger("200"), first.notionalTickLots());
+    assertEquals(3L, later.observedRequests());
+    assertEquals(2L, later.trades());
+    assertEquals(new BigInteger("3"), later.executedLots());
+    assertEquals(new BigInteger("300"), later.notionalTickLots());
+    assertEquals(later, audit.snapshot());
+    assertEquals(2L, book.remainingLots(10L).orElseThrow());
+  }
+
   private static CommandRequest request(long id, EngineCommand command) {
     return new CommandRequest(new UUID(0L, id), command);
   }
