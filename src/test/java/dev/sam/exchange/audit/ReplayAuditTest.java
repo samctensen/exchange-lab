@@ -143,6 +143,25 @@ class ReplayAuditTest {
     assertEquals(List.of(), book.snapshot());
   }
 
+  @Test
+  void fingerprintsEveryObservationIncludingDuplicatesAndConflicts() {
+    UUID placeId = UUID.fromString("01234567-89ab-cdef-fedc-ba9876543210");
+    CommandRequest place = new CommandRequest(placeId, new PlaceOrder(Long.MIN_VALUE, Side.ASK, 101L, 7L));
+    audit.accept(place);
+    audit.accept(
+        new CommandRequest(UUID.fromString("8899aabb-ccdd-eeff-0011-223344556677"), new CancelOrder(Long.MIN_VALUE)));
+    audit.accept(place);
+    audit.accept(new CommandRequest(placeId, new PlaceOrder(Long.MIN_VALUE, Side.ASK, 102L, 7L)));
+
+    ReplayAuditSnapshot snapshot = audit.snapshot();
+    assertEquals(4L, snapshot.observedRequests());
+    assertEquals(2L, snapshot.uniqueRequests());
+    assertEquals(1L, snapshot.duplicateRequests());
+    assertEquals(1L, snapshot.conflictingRequests());
+    assertEquals("229d75b225550185298b7a9523e4c9f8839748bae71cf5e4d9910d456b712930", snapshot.historySha256());
+    assertEquals(List.of(), book.snapshot());
+  }
+
   private static CommandRequest request(long id, EngineCommand command) {
     return new CommandRequest(new UUID(0L, id), command);
   }

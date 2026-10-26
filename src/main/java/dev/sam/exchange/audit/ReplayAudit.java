@@ -16,6 +16,7 @@ import dev.sam.exchange.transport.RequestStateMachine;
 /** Applies a request history to a fresh state machine on its owning thread. */
 public final class ReplayAudit implements Consumer<CommandRequest> {
   private final RequestStateMachine state;
+  private final RequestHistoryDigest history = new RequestHistoryDigest();
   private long observedRequests;
   private long uniqueRequests;
   private long duplicateRequests;
@@ -36,6 +37,7 @@ public final class ReplayAudit implements Consumer<CommandRequest> {
     Objects.requireNonNull(request, "request must not be null");
     boolean cached = state.hasProcessed(request.requestId());
     var response = state.process(request);
+    history.append(request);
     observedRequests++;
     if (response.result() instanceof RejectResult reject && reject.reason() == RejectReason.REQUEST_ID_CONFLICT) {
       conflictingRequests++;
@@ -65,6 +67,7 @@ public final class ReplayAudit implements Consumer<CommandRequest> {
 
   public ReplayAuditSnapshot snapshot() {
     return new ReplayAuditSnapshot(observedRequests, uniqueRequests, duplicateRequests, conflictingRequests,
-        placeRequests, cancelRequests, businessRejections, trades, executedLots, notionalTickLots, "");
+        placeRequests, cancelRequests, businessRejections, trades, executedLots, notionalTickLots,
+        history.snapshotSha256());
   }
 }
