@@ -17,6 +17,28 @@ public final class ArchiveInspector {
   private ArchiveInspector() {
   }
 
+  public static void main(String[] args) throws IOException {
+    if (args.length == 1 && "--help".equals(args[0])) {
+      System.out.print("""
+          Usage: ArchiveInspector --archive=path [--levels=1..1000] [--format=text|json]
+          Defaults: --levels=10 --format=text
+          Stop the engine and other Archive owners before inspecting an existing Archive.
+          Inspection replays requests without appending; Archive startup may update housekeeping metadata.
+          Output contains aggregate statistics and bounded depth; JSON uses decimal strings for wide numbers.
+          A failed or interrupted replay produces no report. See docs/archive-inspection.md.
+          """);
+      return;
+    }
+    ArchiveInspectorConfig config = ArchiveInspectorConfig.parse(args);
+    ArchiveInspection inspection = inspect(config.archive(), config.levels());
+    String report = switch (config.format()) {
+      case TEXT -> ArchiveInspectionReport.text(inspection);
+      case JSON -> ArchiveInspectionReport.json(inspection);
+    };
+    checkInterrupted();
+    System.out.print(report);
+  }
+
   /**
    * Opens an existing, offline Archive with a private Media Driver. Startup can update Archive
    * housekeeping metadata; this method never appends request history. Stop the existing owner first.
