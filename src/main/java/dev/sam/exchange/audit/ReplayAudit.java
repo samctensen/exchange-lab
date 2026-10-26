@@ -6,6 +6,7 @@ import java.util.function.Consumer;
 
 import dev.sam.exchange.engine.CancelOrder;
 import dev.sam.exchange.engine.PlaceOrder;
+import dev.sam.exchange.engine.RejectReason;
 import dev.sam.exchange.engine.RejectResult;
 import dev.sam.exchange.transport.CommandRequest;
 import dev.sam.exchange.transport.RequestStateMachine;
@@ -15,6 +16,8 @@ public final class ReplayAudit implements Consumer<CommandRequest> {
   private final RequestStateMachine state;
   private long observedRequests;
   private long uniqueRequests;
+  private long duplicateRequests;
+  private long conflictingRequests;
   private long placeRequests;
   private long cancelRequests;
   private long businessRejections;
@@ -26,8 +29,17 @@ public final class ReplayAudit implements Consumer<CommandRequest> {
   @Override
   public void accept(CommandRequest request) {
     Objects.requireNonNull(request, "request must not be null");
+    boolean cached = state.hasProcessed(request.requestId());
     var response = state.process(request);
     observedRequests++;
+    if (response.result() instanceof RejectResult reject && reject.reason() == RejectReason.REQUEST_ID_CONFLICT) {
+      conflictingRequests++;
+      return;
+    }
+    if (cached) {
+      duplicateRequests++;
+      return;
+    }
     uniqueRequests++;
     switch (request.command()) {
       case PlaceOrder ignored -> placeRequests++;
@@ -39,7 +51,7 @@ public final class ReplayAudit implements Consumer<CommandRequest> {
   }
 
   public ReplayAuditSnapshot snapshot() {
-    return new ReplayAuditSnapshot(observedRequests, uniqueRequests, 0L, 0L, placeRequests, cancelRequests,
-        businessRejections, 0L, BigInteger.ZERO, BigInteger.ZERO, "");
+    return new ReplayAuditSnapshot(observedRequests, uniqueRequests, duplicateRequests, conflictingRequests,
+        placeRequests, cancelRequests, businessRejections, 0L, BigInteger.ZERO, BigInteger.ZERO, "");
   }
 }
