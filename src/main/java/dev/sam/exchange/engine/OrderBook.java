@@ -1,5 +1,6 @@
 package dev.sam.exchange.engine;
 
+import java.math.BigInteger;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -95,6 +96,24 @@ public class OrderBook {
     }
     return new BookDepth(bids.values().stream().limit(maxLevels).map(PriceLevel::snapshot).toList(),
         asks.values().stream().limit(maxLevels).map(PriceLevel::snapshot).toList());
+  }
+
+  /** Captures full-book totals on the owning thread, independently of any depth limit. */
+  public BookSummary summary() {
+    int bidOrders = 0;
+    int askOrders = 0;
+    BigInteger bidLots = BigInteger.ZERO;
+    BigInteger askLots = BigInteger.ZERO;
+    for (RestingOrder order : ordersById.values()) {
+      if (order.order().side() == Side.BID) {
+        bidOrders++;
+        bidLots = bidLots.add(BigInteger.valueOf(order.remainingLots()));
+      } else {
+        askOrders++;
+        askLots = askLots.add(BigInteger.valueOf(order.remainingLots()));
+      }
+    }
+    return new BookSummary(bidOrders, askOrders, bids.size(), asks.size(), bidLots, askLots);
   }
 
   public List<OrderSnapshot> snapshot() {
