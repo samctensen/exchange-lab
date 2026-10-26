@@ -15,6 +15,10 @@ record ArchiveInspectorConfig(Path archive, int levels, Format format) {
     Objects.requireNonNull(format, "format");
     if (archive.toString().isBlank())
       throw new IllegalArgumentException("--archive must not be blank");
+    validateLevels(levels);
+  }
+
+  static void validateLevels(int levels) {
     if (levels < 1 || levels > 1000)
       throw new IllegalArgumentException("--levels must be between 1 and 1000");
   }
