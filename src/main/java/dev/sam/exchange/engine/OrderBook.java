@@ -85,6 +85,18 @@ public class OrderBook {
     }
   }
 
+  /**
+   * Captures at most {@code maxLevels} per side, best price first, on the owning thread.
+   * Zero returns empty sides; a negative limit is invalid. Later book mutations do not affect the result.
+   */
+  public BookDepth depth(int maxLevels) {
+    if (maxLevels < 0) {
+      throw new IllegalArgumentException("maxLevels must not be negative");
+    }
+    return new BookDepth(bids.values().stream().limit(maxLevels).map(PriceLevel::snapshot).toList(),
+        asks.values().stream().limit(maxLevels).map(PriceLevel::snapshot).toList());
+  }
+
   public List<OrderSnapshot> snapshot() {
     return ordersById.values().stream().map(order -> new OrderSnapshot(order.order(), order.remainingLots())).toList();
   }
