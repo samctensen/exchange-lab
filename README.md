@@ -78,6 +78,8 @@ If the server stops after recording a request but before applying it or deliveri
 
 See [Archive recovery operations](docs/archive-recovery.md) for exact recording selection,
 interruption, malformed-history diagnostics and failed-close cleanup.
+Use the [offline Archive inspector](docs/archive-inspection.md) to reconstruct a stopped
+book, summarize request outcomes and compare history fingerprints without appending requests.
 
 Read the implementation in this order:
 
