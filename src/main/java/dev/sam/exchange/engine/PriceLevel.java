@@ -1,5 +1,6 @@
 package dev.sam.exchange.engine;
 
+import java.math.BigInteger;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -38,6 +39,20 @@ public class PriceLevel {
 
   public Optional<RestingOrder> remove(long orderId) {
     return Optional.ofNullable(this.orders.remove(orderId));
+  }
+
+  /** Reads current remaining lots on the owning thread, excluding fully filled orders. */
+  public PriceLevelSnapshot snapshot() {
+    int orderCount = 0;
+    BigInteger quantityLots = BigInteger.ZERO;
+    for (RestingOrder order : orders.values()) {
+      long remainingLots = order.remainingLots();
+      if (remainingLots > 0L) {
+        orderCount++;
+        quantityLots = quantityLots.add(BigInteger.valueOf(remainingLots));
+      }
+    }
+    return new PriceLevelSnapshot(priceTicks, orderCount, quantityLots);
   }
 
   public boolean isEmpty() {

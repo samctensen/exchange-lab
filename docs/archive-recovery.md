@@ -11,6 +11,11 @@ its requests into a fresh state machine, then extends that same recording.
 See [the architecture](architecture.md) and [recording guarantees](../README.md#ordering-recording-and-recovery)
 for the write-before-execution sequence and local durability limits.
 
+For aggregate outcomes, bounded book depth and a deterministic history fingerprint,
+use the [offline Archive inspector](archive-inspection.md). Stop the current owner
+first; inspection does not append requests, but Archive startup can update its own
+housekeeping metadata.
+
 ## Cancellation and corrupt history
 
 - An already interrupted caller fails before catalogue access or writer creation.
